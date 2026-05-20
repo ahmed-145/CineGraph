@@ -1,0 +1,44 @@
+# Credentials — NEVER commit
+.env
+*.env
+.env.*
+.env.local
+*.env.local
+!.env.example
+!backend/.env.example
+!frontend/.env.example
+
+# Python
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+venv/
+**/venv/
+.venv/
+**/.venv/
+*.egg-info/
+dist/
+build/
+*.log
+*.log.*
+
+# Node
+node_modules/
+frontend/dist/
+
+# Data / large files
+backend/films_catalog.json
+backend/films_seed.py
+
+# Claude Code internal files
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
