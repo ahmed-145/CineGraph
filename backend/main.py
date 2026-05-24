@@ -20,7 +20,15 @@ load_dotenv()
 from config import settings
 from ingest import build_film_text, build_payload, fetch_tmdb_metadata, download_poster
 import db
+import vibe as vibe_mod
 from constellations import router as constellations_router
+
+
+# Active collection — picked at startup. v2 (3-axis) preferred when present;
+# falls back to v1 (text+visual only).
+ACTIVE_COLLECTION: str | None = None
+ACTIVE_DIM: int = settings.embedding_dim
+HAS_VIBE: bool = False
 
 TMDB_BASE = "https://api.themoviedb.org/3"
 
@@ -28,6 +36,7 @@ TMDB_BASE = "https://api.themoviedb.org/3"
 qdrant: QdrantClient = None
 groq_client: Groq | None = None
 text_model: TextEmbedding | None = None
+vibe_model: TextEmbedding | None = None
 image_model: ImageEmbedding | None = None
 embed_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
@@ -41,7 +50,8 @@ qdrant_executor = concurrent.futures.ThreadPoolExecutor(max_workers=8)
 # ── startup / shutdown ──────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global qdrant, groq_client, text_model, image_model, FILM_INDEX
+    global qdrant, groq_client, text_model, image_model, vibe_model, FILM_INDEX
+    global ACTIVE_COLLECTION, ACTIVE_DIM, HAS_VIBE
 
     qdrant = QdrantClient(url=settings.qdrant_url)
 
@@ -53,10 +63,28 @@ async def lifespan(app: FastAPI):
     else:
         print("Groq disabled — /explain will no-op")
 
+    # Pick the most capable collection available
+    existing = {c.name for c in qdrant.get_collections().collections}
+    if settings.qdrant_collection_v2 in existing:
+        ACTIVE_COLLECTION = settings.qdrant_collection_v2
+        ACTIVE_DIM = settings.embedding_dim_v2
+        HAS_VIBE = True
+        print(f"Active collection: {ACTIVE_COLLECTION} (3-axis, {ACTIVE_DIM}-d)")
+    else:
+        ACTIVE_COLLECTION = settings.qdrant_collection
+        ACTIVE_DIM = settings.embedding_dim
+        HAS_VIBE = False
+        print(f"Active collection: {ACTIVE_COLLECTION} (2-axis, {ACTIVE_DIM}-d)")
+        print(f"  (run `python ingest_vibe.py` to enable the vibe axis)")
+
     print(f"Loading embedding models...")
     text_model = TextEmbedding(model_name=settings.embedding_model)
     image_model = ImageEmbedding(model_name=settings.clip_model)
-    print(f"  Text: {settings.embedding_model} | Visual: {settings.clip_model}")
+    if HAS_VIBE:
+        vibe_model = TextEmbedding(model_name=settings.vibe_model)
+        print(f"  Text: {settings.embedding_model} | Vibe: {settings.vibe_model} | Visual: {settings.clip_model}")
+    else:
+        print(f"  Text: {settings.embedding_model} | Visual: {settings.clip_model}")
 
     await _build_film_index()
     print(f"Film index loaded: {len(FILM_INDEX)} films")
@@ -71,7 +99,7 @@ async def _build_film_index():
     offset = None
     while True:
         result, offset = qdrant.scroll(
-            collection_name=settings.qdrant_collection,
+            collection_name=ACTIVE_COLLECTION,
             limit=250,
             offset=offset,
             with_payload=True,
@@ -146,8 +174,14 @@ def _payload_to_film(payload: dict, score: float = 0.0, scores: dict = None) -> 
     }
 
 
-def _embed_film_sync(data: dict) -> list[float]:
-    """Generate combined 1280-d embedding for one film. Runs in thread pool."""
+def _embed_film_sync(data: dict) -> tuple[list[float], dict]:
+    """Generate combined embedding for one film. Layout depends on HAS_VIBE.
+
+    v1 layout: [text(768) | visual(512)] = 1280d
+    v2 layout: [text(768) | vibe(768) | visual(512)] = 2048d
+
+    Returns (vector, vibe_payload_extras).
+    """
     text = build_film_text(data)
     text_vec = list(text_model.embed([text]))[0].tolist()
 
@@ -158,13 +192,43 @@ def _embed_film_sync(data: dict) -> list[float]:
     else:
         visual_vec = [0.0] * settings.visual_dim
 
-    return text_vec + visual_vec
+    if HAS_VIBE and vibe_model is not None:
+        try:
+            reviews = vibe_mod.fetch_tmdb_reviews(
+                data["id"], settings.tmdb_api_key,
+                max_pages=settings.vibe_review_max_pages,
+            )
+            result = vibe_mod.build_vibe_vector(
+                reviews,
+                embedder=vibe_model,
+                vibe_dim=settings.vibe_dim,
+                spacy_model=settings.spacy_model,
+                chunk_words_max=settings.vibe_chunk_words,
+            )
+            extras = {
+                "vibe_confident": result.confident,
+                "vibe_chunks": result.chunk_count,
+                "vibe_tokens": result.raw_token_count,
+            }
+            return text_vec + result.vector + visual_vec, extras
+        except Exception as e:
+            print(f"  vibe build failed for {data.get('id')}: {e}")
+            zero_vibe = [0.0] * settings.vibe_dim
+            return text_vec + zero_vibe + visual_vec, {"vibe_confident": False}
+
+    return text_vec + visual_vec, {}
 
 
 # ── routes ─────────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
-    return {"status": "ok", "film_count": len(FILM_INDEX)}
+    return {
+        "status": "ok",
+        "film_count": len(FILM_INDEX),
+        "collection": ACTIVE_COLLECTION,
+        "embedding_dim": ACTIVE_DIM,
+        "axes": ["text", "vibe", "visual"] if HAS_VIBE else ["text", "visual"],
+    }
 
 
 @app.get("/search")
@@ -253,11 +317,11 @@ async def lazy_embed(tmdb_id: int):
         raise HTTPException(404, f"TMDB film {tmdb_id} not found")
 
     loop = asyncio.get_event_loop()
-    combined_vec = await loop.run_in_executor(embed_executor, _embed_film_sync, data)
+    combined_vec, extras = await loop.run_in_executor(embed_executor, _embed_film_sync, data)
 
-    payload = build_payload(data)
+    payload = {**build_payload(data), **extras}
     qdrant.upsert(
-        collection_name=settings.qdrant_collection,
+        collection_name=ACTIVE_COLLECTION,
         points=[PointStruct(id=data["id"], vector=combined_vec, payload=payload)],
     )
     FILM_INDEX[tmdb_id] = payload
@@ -271,7 +335,7 @@ def expand(req: ExpandRequest):
 
     blocked = list(set(req.exclude_ids + [req.tmdb_id]))
     results = qdrant.recommend(
-        collection_name=settings.qdrant_collection,
+        collection_name=ACTIVE_COLLECTION,
         positive=[req.tmdb_id],
         limit=req.limit + req.offset,
         with_payload=True,
@@ -293,7 +357,7 @@ async def intersect(req: IntersectRequest):
 
     def _query(seed_id):
         return qdrant.recommend(
-            collection_name=settings.qdrant_collection,
+            collection_name=ACTIVE_COLLECTION,
             positive=[seed_id],
             limit=50,
             with_payload=True,
