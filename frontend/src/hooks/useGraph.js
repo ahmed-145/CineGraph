@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 
-export const SEED_COLORS = ['#00d4ff', '#ff00aa', '#ffcc00', '#00ff88', '#ff6600']
+export const SEED_COLORS = ['#00FFD1', '#FF00A8', '#FFD66B', '#7CFFB2', '#FF8A4C']
 const NODE_SPREAD = 160
 const INTERSECT_SPREAD = 130
 const AUTO_FADE_THRESHOLD = 100
@@ -103,7 +103,7 @@ export function useGraph() {
         ? { x: 0, y: 0 }
         : { x: (Math.random() - 0.5) * 300, y: (Math.random() - 0.5) * 300 }
     lastTouchedRef.current.set(id, Date.now())
-    setNodes((prev) => [...prev, { ...film, id, type: 'root', ...pos }])
+    setNodes((prev) => [...prev, { ...film, id, type: 'root', ...pos, fx: pos.x, fy: pos.y }])
   }, [])
 
   const expandNode = useCallback(
@@ -248,7 +248,11 @@ export function useGraph() {
         setMode('exploring')
       }
       setNodes((prev) =>
-        prev.map((n) => (n.id === id ? { ...n, is_seed: true, seed_color: color } : n))
+        prev.map((n) =>
+          n.id === id
+            ? { ...n, is_seed: true, seed_color: color, fx: n.x, fy: n.y }
+            : n
+        )
       )
     },
     [runIntersect, touchNode]

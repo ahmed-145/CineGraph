@@ -39,7 +39,7 @@ export default function AuthModal({ auth, onClose }) {
     <div className="auth-overlay" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div className="auth-modal">
         <button className="auth-close" onClick={onClose}>×</button>
-        <div className="auth-logo">CineGraph</div>
+        <div className="auth-logo">Cine<span className="accent">Graph</span></div>
 
         {done ? (
           <div className="auth-done">

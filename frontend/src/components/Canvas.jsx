@@ -1,11 +1,44 @@
 import { useCallback, useEffect, useRef } from 'react'
 import ForceGraph2D from 'react-force-graph-2d'
 import { forceCollide } from 'd3-force'
-import { SEED_COLORS } from '../hooks/useGraph'
 
 const TMDB_IMG = 'https://image.tmdb.org/t/p/w92'
-const NODE_R = 26
+const NODE_R = 28          // base node radius
+const RESULT_R = 34        // larger intersect result
+const SEED_R = 32          // seeds slightly larger
 const imageCache = new Map()
+
+// ── color helpers ────────────────────────────────────────────────────────────
+function hexToRgb(hex) {
+  const h = hex.replace('#', '')
+  const v = h.length === 3
+    ? h.split('').map((c) => parseInt(c + c, 16))
+    : [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16))
+  return v
+}
+function lerpHex(a, b, t) {
+  const [ar, ag, ab] = hexToRgb(a)
+  const [br, bg, bb] = hexToRgb(b)
+  const r = Math.round(ar + (br - ar) * t)
+  const g = Math.round(ag + (bg - ag) * t)
+  const bl = Math.round(ab + (bb - ab) * t)
+  return `rgb(${r},${g},${bl})`
+}
+
+// Mood color from id — desaturated dark ember, like HTML reference moods
+function moodColor(id) {
+  const hue = (parseInt(id, 10) * 137) % 360
+  return `hsl(${hue}, 30%, 18%)`
+}
+function moodColorFill(id) {
+  // Even darker for the inner ember fill
+  const hue = (parseInt(id, 10) * 137) % 360
+  return `hsl(${hue}, 22%, 7%)`
+}
+function moodColorGlow(id) {
+  const hue = (parseInt(id, 10) * 137) % 360
+  return `hsl(${hue}, 60%, 28%)`
+}
 
 function loadImage(posterPath) {
   if (!posterPath) return null
@@ -18,12 +51,6 @@ function loadImage(posterPath) {
   img.src = url
   imageCache.set(url, 'loading')
   return null
-}
-
-function filmColor(id) {
-  const hue = (parseInt(id, 10) * 137) % 360
-  // 60% saturation, richer midtones — OLED neon palette spec
-  return `hsl(${hue}, 60%, 22%)`
 }
 
 export default function Canvas({
@@ -46,7 +73,7 @@ export default function Canvas({
     })
   }, [graphData.nodes])
 
-  // Scroll to pan — intercept wheel before d3-zoom; ctrl/meta still zooms
+  // Scroll → pan
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -63,271 +90,267 @@ export default function Canvas({
     return () => el.removeEventListener('wheel', onWheel, { capture: true })
   }, [graphRef])
 
-  // Configure forces and unpin freshly-placed nodes after settle window
+  // Configure forces once. No center force → no drift. Mild repulsion + weak
+  // link tension + collide for safety. Free bodies will settle near where
+  // they're placed; pinned nodes (seeds, root films) stay put.
   useEffect(() => {
     const fg = graphRef.current
     if (!fg) return
+    fg.d3Force('center', null)
+    fg.d3Force('charge')?.strength(-90).distanceMax(420)
+    fg.d3Force('link')?.distance(130).strength(0.18)
+    fg.d3Force('collide', forceCollide(NODE_R * 1.45).strength(0.75))
+  }, [graphRef])
 
-    fg.d3Force('charge')?.strength(-180)
-    fg.d3Force('link')?.distance(100).strength(0.35)
-    fg.d3Force('collide', forceCollide(NODE_R * 1.4))
-    fg.d3Force('center')?.strength(0.02)
-    fg.d3ReheatSimulation()
-
-    // After nodes animate to their pinned positions, release them so the sim
-    // can settle them naturally, then onEngineStop re-freezes everything.
-    const timer = setTimeout(() => {
-      graphData.nodes.forEach((node) => {
-        if (node._pinned) {
-          delete node.fx
-          delete node.fy
-          delete node._pinned
-        }
+  // Newly placed expand children + intersect results arrive with `_pinned: true`
+  // so they fly to their radial/cluster slots. After 700ms we release the pin
+  // → they float as free bodies and respond to drags / charge / link forces.
+  useEffect(() => {
+    const pinned = graphData.nodes.filter((n) => n._pinned)
+    if (!pinned.length) return
+    const t = setTimeout(() => {
+      pinned.forEach((n) => {
+        delete n.fx
+        delete n.fy
+        delete n._pinned
       })
-    }, 500)
-
-    return () => clearTimeout(timer)
+      graphRef.current?.d3ReheatSimulation()
+    }, 700)
+    return () => clearTimeout(t)
   }, [graphData.nodes.length, graphRef, graphData.nodes])
 
-  // ── group drag (spring-lerp following) ────────────────────────────────────
-  // Each drag frame we compute totalDelta from the drag start, then lerp each
-  // neighbour toward (basePos + totalDelta). Neighbours stay pinned so d3 forces
-  // can't fight us mid-drag. On drag end we unpin them and let the sim settle;
-  // onEngineStop re-freezes once the sim cools.
-
-  const handleNodeDrag = useCallback((node) => {
-    const fg = graphRef.current
-    if (!fg) return
-    const nodeId = String(node.id ?? node.tmdb_id)
-
-    if (!dragGroupRef.current) {
-      // First call — collect direct neighbours and snapshot their positions
-      const seen = new Set([nodeId])
-      const group = []
-
-      const linkForce = fg.d3Force('link')
-      const links = linkForce ? linkForce.links() : graphData.links
-
-      links.forEach((l) => {
-        const srcId = typeof l.source === 'object'
-          ? String(l.source.id ?? l.source.tmdb_id) : String(l.source)
-        const tgtId = typeof l.target === 'object'
-          ? String(l.target.id ?? l.target.tmdb_id) : String(l.target)
-
-        let cn = null
-        if (srcId === nodeId && typeof l.target === 'object') cn = l.target
-        else if (tgtId === nodeId && typeof l.source === 'object') cn = l.source
-        if (!cn) return
-
-        const cnId = String(cn.id ?? cn.tmdb_id)
-        if (seen.has(cnId)) return
-        seen.add(cnId)
-
-        cn._dragBx = cn.x ?? 0
-        cn._dragBy = cn.y ?? 0
-        group.push(cn)
-      })
-
-      dragGroupRef.current = { group, sx: node.x, sy: node.y }
-      return
-    }
-
-    // Subsequent calls — spring-lerp each neighbour toward base + totalDelta
-    const { group, sx, sy } = dragGroupRef.current
-    const tdx = node.x - sx
-    const tdy = node.y - sy
-    const k = 0.28  // spring factor per frame (~10 frames to 97% of target)
-
-    group.forEach((cn) => {
-      const tx = cn._dragBx + tdx
-      const ty = cn._dragBy + tdy
-      cn.x += (tx - cn.x) * k
-      cn.y += (ty - cn.y) * k
-      cn.fx = cn.x
-      cn.fy = cn.y
-    })
-  }, [graphRef, graphData.links])
+  // ── single-node drag ──────────────────────────────────────────────────────
+  // react-force-graph's built-in d3-drag sets fx/fy on the dragged node each
+  // frame. Other nodes stay free and react to charge/link forces naturally.
+  const handleNodeDrag = useCallback(() => {}, [])
 
   const handleNodeDragEnd = useCallback((node) => {
-    node.fx = node.x
-    node.fy = node.y
-    // Unpin neighbours so physics can make final micro-adjustments
-    if (dragGroupRef.current?.group) {
-      dragGroupRef.current.group.forEach((cn) => {
-        delete cn.fx
-        delete cn.fy
-        delete cn._dragBx
-        delete cn._dragBy
-      })
+    // Anchors (seeds, summoned root films) re-lock at the new drop position.
+    // Free bodies (expand children / intersect results) get released so they
+    // can keep floating and reacting to neighbors after release.
+    const isAnchor =
+      node.type === 'root' ||
+      node.is_seed ||
+      seeds.some((s) => s.id === node.id)
+    if (isAnchor) {
+      node.fx = node.x
+      node.fy = node.y
+    } else {
+      delete node.fx
+      delete node.fy
     }
-    dragGroupRef.current = null
-  }, [])
+    graphRef.current?.d3ReheatSimulation()
+  }, [seeds, graphRef])
 
   // ── node draw ──────────────────────────────────────────────────────────────
   const drawNode = useCallback(
     (node, ctx, globalScale) => {
       const { x, y } = node
       const seed = seeds.find((s) => s.id === node.id)
+      const seedIndex = seed ? seeds.indexOf(seed) : -1
       const isIntersectResult = intersectResultIds.has(node.id)
       const isSelected = selectedNode?.id === node.id
       const isInIntersectMode = mode === 'intersecting'
       const isGenreDimmed =
         highlightedGenre && !seed && !node.genres?.includes(highlightedGenre)
-      const isDimmed =
-        isGenreDimmed ||
-        (isInIntersectMode && !seed && !isIntersectResult && node.type !== 'root')
+      // Context fade (HTML "context" class — non-seed, non-result during intersect)
+      const isContextDim = isInIntersectMode && !seed && !isIntersectResult && node.type !== 'root'
+      const isDimmed = isGenreDimmed
+
+      const R = seed ? SEED_R : isIntersectResult ? RESULT_R : NODE_R
+      const baseAlpha = isDimmed ? 0.2 : isContextDim ? 0.3 : 1
 
       ctx.save()
-      ctx.globalAlpha = isDimmed ? 0.2 : 1
+      ctx.globalAlpha = baseAlpha
 
-      // Seed pulsing halo + OLED neon glow (text-shadow equivalent via shadowBlur)
+      // ── Seed pulsing halo ──────────────────────────────────────────────────
       if (seed) {
-        const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 420)
-        const haloR = NODE_R + 6 + pulse * 5
-        const grad = ctx.createRadialGradient(x, y, NODE_R * 0.5, x, y, haloR + 8)
-        grad.addColorStop(0, seed.color + '66')
-        grad.addColorStop(0.5, seed.color + '28')
+        const t = (Date.now() % 2000) / 2000
+        const phase = (t + (seedIndex * 0.5)) % 1
+        const pulse = 0.85 + 0.15 * Math.sin(phase * Math.PI * 2)
+        const haloR = (R + 22) * pulse
+
+        const grad = ctx.createRadialGradient(x, y, R * 0.5, x, y, haloR)
+        grad.addColorStop(0, seed.color + '59')   // 35%
+        grad.addColorStop(0.35, seed.color + '2e') // 18%
         grad.addColorStop(1, seed.color + '00')
         ctx.beginPath()
-        ctx.arc(x, y, haloR + 8, 0, 2 * Math.PI)
+        ctx.arc(x, y, haloR, 0, 2 * Math.PI)
         ctx.fillStyle = grad
         ctx.fill()
 
-        // Neon glow ring — OLED spec: minimal glow 0 0 10px
+        // inset hairline ring
         ctx.beginPath()
-        ctx.arc(x, y, NODE_R + 2, 0, 2 * Math.PI)
-        ctx.strokeStyle = seed.color + 'aa'
-        ctx.lineWidth = 1.5
-        ctx.shadowColor = seed.color
-        ctx.shadowBlur = 14
+        ctx.arc(x, y, R + 8, 0, 2 * Math.PI)
+        ctx.strokeStyle = seed.color + '40'
+        ctx.lineWidth = 1
         ctx.stroke()
+      }
+
+      // ── Intersect result conic-gradient ring ───────────────────────────────
+      if (isIntersectResult && !seed) {
+        const ringR = R + 5
+        const segments = 64
+        // Conic stops emulate HTML: cyan 0° → mid 60° → magenta 180° → mid 240° → cyan 360°
+        const stops = [
+          { t: 0.000, c: '#00FFD1' },
+          { t: 0.167, c: '#4dd6cd' },
+          { t: 0.500, c: '#b56fc0' },
+          { t: 0.667, c: '#FF00A8' },
+          { t: 0.833, c: '#b56fc0' },
+          { t: 1.000, c: '#00FFD1' },
+        ]
+        const colorAt = (u) => {
+          for (let i = 0; i < stops.length - 1; i++) {
+            if (u >= stops[i].t && u <= stops[i + 1].t) {
+              const local = (u - stops[i].t) / (stops[i + 1].t - stops[i].t)
+              return lerpHex(stops[i].c, stops[i + 1].c, local)
+            }
+          }
+          return stops[0].c
+        }
+
+        ctx.shadowColor = 'rgba(180,120,200,0.45)'
+        ctx.shadowBlur = 8
+        for (let i = 0; i < segments; i++) {
+          const a0 = (i / segments) * Math.PI * 2 - Math.PI / 2
+          const a1 = ((i + 1) / segments) * Math.PI * 2 - Math.PI / 2 + 0.005
+          ctx.beginPath()
+          ctx.arc(x, y, ringR, a0, a1)
+          ctx.strokeStyle = colorAt(i / segments)
+          ctx.lineWidth = 2.5
+          ctx.stroke()
+        }
         ctx.shadowBlur = 0
       }
 
-      // Intersect result: arc segments per seed color
-      if (isIntersectResult && node.seedColors?.length >= 2) {
-        const colors = node.seedColors
-        const segAngle = (2 * Math.PI) / colors.length
-        colors.forEach((color, i) => {
-          ctx.beginPath()
-          ctx.arc(x, y, NODE_R + 4, i * segAngle - Math.PI / 2, (i + 1) * segAngle - Math.PI / 2)
-          ctx.strokeStyle = color
-          ctx.lineWidth = 2.5
-          ctx.stroke()
-        })
-      }
-
-      // Selected ring
+      // ── Selected outline ──────────────────────────────────────────────────
       if (isSelected) {
         ctx.beginPath()
-        ctx.arc(x, y, NODE_R + 3.5, 0, 2 * Math.PI)
+        ctx.arc(x, y, R + (isIntersectResult ? 10 : 4), 0, 2 * Math.PI)
         ctx.strokeStyle = 'rgba(255,255,255,0.85)'
-        ctx.lineWidth = 1.5
+        ctx.lineWidth = 1.2
         ctx.stroke()
       }
 
-      // Poster image or color fallback
-      ctx.beginPath()
-      ctx.arc(x, y, NODE_R, 0, 2 * Math.PI)
-      ctx.save()
-      ctx.clip()
+      // ── Circle body: dark ember radial gradient ───────────────────────────
+      const moodHi = moodColorGlow(node.id)
+      const moodMd = moodColor(node.id)
+      const moodLo = moodColorFill(node.id)
 
+      // Outer mood glow (box-shadow analog from HTML's 0 0 18px var(--mood))
+      ctx.shadowColor = moodMd
+      ctx.shadowBlur = 16
+
+      ctx.beginPath()
+      ctx.arc(x, y, R, 0, 2 * Math.PI)
+      const ember = ctx.createRadialGradient(x, y - R * 0.18, R * 0.1, x, y, R)
+      ember.addColorStop(0, moodHi)
+      ember.addColorStop(0.55, moodMd)
+      ember.addColorStop(1, moodLo)
+      ctx.fillStyle = ember
+      ctx.fill()
+      ctx.shadowBlur = 0
+
+      // Poster overlay (low opacity so the mood ember shows through)
       const img = node.poster_path ? imageCache.get(TMDB_IMG + node.poster_path) : null
       if (img && img !== 'loading' && img.complete && img.naturalWidth > 0) {
-        ctx.drawImage(img, x - NODE_R, y - NODE_R, NODE_R * 2, NODE_R * 2)
-      } else {
-        ctx.fillStyle = filmColor(node.id)
-        ctx.fillRect(x - NODE_R, y - NODE_R, NODE_R * 2, NODE_R * 2)
-        const initials = node.title
-          ?.split(' ')
-          .slice(0, 2)
-          .map((w) => w[0])
-          .join('')
-          .toUpperCase() || '?'
-        ctx.fillStyle = 'rgba(255,255,255,0.75)'
-        ctx.font = `bold ${Math.max(11, 14 / globalScale)}px Inter, sans-serif`
-        ctx.textAlign = 'center'
-        ctx.textBaseline = 'middle'
-        ctx.fillText(initials, x, y)
+        ctx.save()
+        ctx.beginPath()
+        ctx.arc(x, y, R, 0, 2 * Math.PI)
+        ctx.clip()
+        ctx.globalAlpha = baseAlpha * 0.65
+        ctx.drawImage(img, x - R, y - R, R * 2, R * 2)
+        ctx.restore()
       }
-      ctx.restore()
 
-      // Node border
+      // Subtle inset highlight + rim
       ctx.beginPath()
-      ctx.arc(x, y, NODE_R, 0, 2 * Math.PI)
-      ctx.strokeStyle = seed
-        ? seed.color
-        : isIntersectResult
-        ? 'rgba(255,255,255,0.45)'
-        : 'rgba(255,255,255,0.15)'
-      ctx.lineWidth = seed ? 2.5 : 1
+      ctx.arc(x, y, R, 0, 2 * Math.PI)
+      ctx.strokeStyle = 'rgba(255,255,255,0.04)'
+      ctx.lineWidth = 1
       ctx.stroke()
 
-      // Title label — pill background for legibility
-      const maxLen = 20
+      // Dark vignette inside (matches HTML inner 0 0 18px rgba(0,0,0,0.5) inset)
+      const vign = ctx.createRadialGradient(x, y, R * 0.55, x, y, R)
+      vign.addColorStop(0, 'rgba(0,0,0,0)')
+      vign.addColorStop(1, 'rgba(0,0,0,0.55)')
+      ctx.beginPath()
+      ctx.arc(x, y, R, 0, 2 * Math.PI)
+      ctx.fillStyle = vign
+      ctx.fill()
+
+      // ── Title label (plain text below, like HTML) ─────────────────────────
+      const maxLen = 22
       const label =
         node.title?.length > maxLen ? node.title.slice(0, maxLen - 1) + '…' : node.title || ''
       const fontSize = Math.max(9, 11 / globalScale)
-      ctx.font = `500 ${fontSize}px Inter, sans-serif`
+      ctx.font = `400 ${fontSize}px Inter, sans-serif`
       ctx.textAlign = 'center'
       ctx.textBaseline = 'top'
-
-      const labelY = y + NODE_R + 5 / globalScale
-      const textW = ctx.measureText(label).width
-      const padX = 5 / globalScale
-      const padY = 3 / globalScale
-      const pillH = fontSize + padY * 2
-      const pillX = x - textW / 2 - padX
-      const pillW = textW + padX * 2
-      const r = pillH / 2
-
-      ctx.fillStyle = 'rgba(6,6,11,0.72)'
-      ctx.beginPath()
-      if (ctx.roundRect) {
-        ctx.roundRect(pillX, labelY - padY, pillW, pillH, r)
-      } else {
-        ctx.rect(pillX, labelY - padY, pillW, pillH)
-      }
-      ctx.fill()
-
-      ctx.fillStyle = seed ? seed.color : 'rgba(255,255,255,0.88)'
-      ctx.fillText(label, x, labelY)
+      ctx.fillStyle = seed
+        ? seed.color
+        : isContextDim
+        ? 'rgba(232,232,232,0.4)'
+        : 'rgba(232,232,232,0.78)'
+      ctx.fillText(label, x, y + R + 8 / globalScale)
 
       ctx.restore()
     },
     [seeds, intersectResultIds, selectedNode, mode, highlightedGenre]
   )
 
-  // Freeze every node once the sim cools, then immediately resume the RAF loop.
-  // Without resumeAnimation(), react-force-graph cancels its canvas loop when the
-  // simulation stops — drag events reheat d3 but the canvas never redraws.
+  // Keep RAF alive after sim cools so halos + edge dash animation keep ticking.
+  // Do NOT lock every node's fx/fy here — free bodies should stay reactive.
   const handleEngineStop = useCallback(() => {
-    graphData.nodes.forEach((node) => {
-      node.fx = node.x
-      node.fy = node.y
-    })
     graphRef.current?.resumeAnimation()
-  }, [graphData.nodes, graphRef])
+  }, [graphRef])
 
+  // ── link draw: curved bezier + dash flow for intersect ────────────────────
   const drawLink = useCallback((link, ctx) => {
     const src = link.source
     const tgt = link.target
-    if (!src || !tgt || typeof src !== 'object') return
+    if (!src || !tgt || typeof src !== 'object' || typeof tgt !== 'object') return
 
+    if (link.linkType === 'intersect') {
+      const color = link.color || '#00FFD1'
+      const dx = tgt.x - src.x
+      const dy = tgt.y - src.y
+      const len = Math.hypot(dx, dy) || 1
+
+      // Alternate curve sign by stable hash of link id
+      const idStr = String(link.id || '')
+      let sign = 1
+      for (let i = 0; i < idStr.length; i++) sign ^= idStr.charCodeAt(i)
+      sign = sign & 1 ? 1 : -1
+
+      const off = 40
+      const mx = (src.x + tgt.x) / 2 + (-dy / len) * off * sign
+      const my = (src.y + tgt.y) / 2 + (dx / len) * off * sign
+
+      ctx.save()
+      ctx.beginPath()
+      ctx.moveTo(src.x, src.y)
+      ctx.quadraticCurveTo(mx, my, tgt.x, tgt.y)
+      ctx.setLineDash([2, 6])
+      // flowing animation — offset moves over time
+      ctx.lineDashOffset = -((Date.now() / 30) % 200)
+      ctx.strokeStyle = color
+      ctx.globalAlpha = 0.6
+      ctx.lineWidth = 1
+      ctx.shadowColor = color
+      ctx.shadowBlur = 3
+      ctx.stroke()
+      ctx.restore()
+      return
+    }
+
+    // expand & other links — subtle straight gray
     ctx.beginPath()
     ctx.moveTo(src.x, src.y)
     ctx.lineTo(tgt.x, tgt.y)
-
-    if (link.linkType === 'expand') {
-      ctx.strokeStyle = 'rgba(255,255,255,0.12)'
-      ctx.lineWidth = 0.7
-    } else if (link.linkType === 'intersect') {
-      ctx.strokeStyle = (link.color || '#ffffff') + 'aa'
-      ctx.lineWidth = 1.2
-    } else {
-      ctx.strokeStyle = 'rgba(255,255,255,0.08)'
-      ctx.lineWidth = 0.7
-    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)'
+    ctx.lineWidth = 0.7
     ctx.stroke()
   }, [])
 
@@ -336,12 +359,12 @@ export default function Canvas({
       <ForceGraph2D
         ref={graphRef}
         graphData={graphData}
-        backgroundColor="#000005"
+        backgroundColor="rgba(0,0,0,0)"
         nodeCanvasObject={drawNode}
         nodeCanvasObjectMode={() => 'replace'}
         nodePointerAreaPaint={(node, color, ctx) => {
           ctx.beginPath()
-          ctx.arc(node.x, node.y, NODE_R + 8, 0, 2 * Math.PI)
+          ctx.arc(node.x, node.y, NODE_R + 10, 0, 2 * Math.PI)
           ctx.fillStyle = color
           ctx.fill()
         }}

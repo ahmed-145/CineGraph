@@ -85,8 +85,8 @@ export default function SearchBar({ onSelect, isEmpty }) {
     >
       {isEmpty && (
         <>
-          <div className="search-logo">CineGraph</div>
-          <p className="search-hint">Discover films through semantic intersection</p>
+          <div className="search-logo">Cine<span className="accent">Graph</span></div>
+          <p className="search-hint">Start with any film. Find what lives between.</p>
         </>
       )}
       <div className="search-input-row">
