@@ -1,4 +1,7 @@
-export default function HUD({ mode, seeds, onRemoveSeed, nodeCount, archivedCount, onRestoreArchived, resultCount = 0 }) {
+export default function HUD({
+  mode, seeds, onRemoveSeed, nodeCount, archivedCount, onRestoreArchived,
+  resultCount = 0, seedWeights = {}, onSeedWeight,
+}) {
   const isIntersecting = mode === 'intersecting' && seeds.length >= 2
   const isExploring = mode === 'exploring'
 
@@ -35,19 +38,36 @@ export default function HUD({ mode, seeds, onRemoveSeed, nodeCount, archivedCoun
 
       {seeds.length > 0 && (
         <div className="hud-seeds">
-          {seeds.map((seed, i) => (
-            <button
-              key={seed.id}
-              className="hud-seed-pill"
-              style={{ borderColor: `${seed.color}55`, color: seed.color }}
-              onClick={() => onRemoveSeed(parseInt(seed.id))}
-              title="Remove seed"
-            >
-              <span className="hud-seed-dot" style={{ background: seed.color, boxShadow: `0 0 6px ${seed.color}` }} />
-              <span className="hud-seed-title">{seed.title || `Seed ${i + 1}`}</span>
-              <span className="hud-seed-remove">×</span>
-            </button>
-          ))}
+          {seeds.map((seed, i) => {
+            const weight = typeof seedWeights[seed.id] === 'number' ? seedWeights[seed.id] : 1
+            return (
+              <div key={seed.id} className="hud-seed-row">
+                <button
+                  className="hud-seed-pill"
+                  style={{ borderColor: `${seed.color}55`, color: seed.color }}
+                  onClick={() => onRemoveSeed(parseInt(seed.id))}
+                  title="Remove seed"
+                >
+                  <span className="hud-seed-dot" style={{ background: seed.color, boxShadow: `0 0 6px ${seed.color}` }} />
+                  <span className="hud-seed-title">{seed.title || `Seed ${i + 1}`}</span>
+                  <span className="hud-seed-remove">×</span>
+                </button>
+                {isIntersecting && onSeedWeight && (
+                  <input
+                    type="range"
+                    min="0.2"
+                    max="1"
+                    step="0.1"
+                    value={weight}
+                    onChange={(e) => onSeedWeight(seed.id, parseFloat(e.target.value))}
+                    className="hud-weight"
+                    style={{ color: seed.color }}
+                    title={`Weight: ${weight.toFixed(1)}`}
+                  />
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
 

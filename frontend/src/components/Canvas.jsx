@@ -63,6 +63,7 @@ export default function Canvas({
   onNodeClick,
   onNodeHover,
   graphRef,
+  watchlist = new Set(),
 }) {
   const containerRef = useRef()
   const dragGroupRef = useRef(null)
@@ -280,6 +281,33 @@ export default function Canvas({
       ctx.fillStyle = vign
       ctx.fill()
 
+      // ── Watchlist indicator (small gold star top-right) ──────────────────
+      if (watchlist.has(node.id)) {
+        const sx = x + R * 0.65
+        const sy = y - R * 0.65
+        ctx.save()
+        ctx.shadowColor = '#FFD66B'
+        ctx.shadowBlur = 6
+        ctx.fillStyle = '#FFD66B'
+        ctx.beginPath()
+        // five-point star
+        const spikes = 5
+        const outerR = 4.5
+        const innerR = 2
+        let rot = -Math.PI / 2
+        const step = Math.PI / spikes
+        ctx.moveTo(sx + Math.cos(rot) * outerR, sy + Math.sin(rot) * outerR)
+        for (let i = 0; i < spikes; i++) {
+          rot += step
+          ctx.lineTo(sx + Math.cos(rot) * innerR, sy + Math.sin(rot) * innerR)
+          rot += step
+          ctx.lineTo(sx + Math.cos(rot) * outerR, sy + Math.sin(rot) * outerR)
+        }
+        ctx.closePath()
+        ctx.fill()
+        ctx.restore()
+      }
+
       // ── Title label (plain text below, like HTML) ─────────────────────────
       const maxLen = 22
       const label =
@@ -297,7 +325,7 @@ export default function Canvas({
 
       ctx.restore()
     },
-    [seeds, intersectResultIds, selectedNode, mode, highlightedGenre]
+    [seeds, intersectResultIds, selectedNode, mode, highlightedGenre, watchlist]
   )
 
   // Keep RAF alive after sim cools so halos + edge dash animation keep ticking.

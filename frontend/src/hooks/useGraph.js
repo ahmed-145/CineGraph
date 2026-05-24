@@ -28,7 +28,7 @@ function midpoint(nodes) {
   }
 }
 
-export function useGraph() {
+export function useGraph(excludedSet = new Set()) {
   const [nodes, setNodes] = useState([])
   const [links, setLinks] = useState([])
   const [seeds, setSeeds] = useState([])
@@ -38,6 +38,13 @@ export function useGraph() {
   const [intersectResultIds, setIntersectResultIds] = useState(new Set())
   const [expandedIds, setExpandedIds] = useState(new Set())
   const [archivedNodes, setArchivedNodes] = useState([])
+  // Per-seed weight 0.2..1.0 keyed by seed id. Default 1.0.
+  const [seedWeights, setSeedWeights] = useState({})
+
+  const excludedRef = useRef(excludedSet)
+  excludedRef.current = excludedSet
+  const seedWeightsRef = useRef(seedWeights)
+  seedWeightsRef.current = seedWeights
 
   const nodesRef = useRef(nodes)
   nodesRef.current = nodes
@@ -118,7 +125,11 @@ export function useGraph() {
         : 0
 
       try {
-        const results = await api.expand(tmdb_id, currentIds, offset)
+        const blockedIds = [
+          ...currentIds,
+          ...[...excludedRef.current].map((x) => parseInt(x)).filter(Boolean),
+        ]
+        const results = await api.expand(tmdb_id, blockedIds, offset)
         const positions = radialPositions(parent.x || 0, parent.y || 0, results.length)
         const now = Date.now()
 
@@ -170,10 +181,18 @@ export function useGraph() {
       const seedNodes = currentSeeds.map((s) => getNode(s.id)).filter(Boolean)
       const mid = midpoint(seedNodes)
       const currentIds = nodesRef.current.map((n) => parseInt(n.id))
-      const exclude = currentIds.filter((id) => !seedIds.includes(id))
+      const baseExclude = currentIds.filter((id) => !seedIds.includes(id))
+      const userExcludes = [...excludedRef.current].map((x) => parseInt(x)).filter(Boolean)
+      const exclude = [...new Set([...baseExclude, ...userExcludes])]
+      const weights = seedWeightsRef.current
+      const weightArg = {}
+      currentSeeds.forEach((s) => {
+        const w = weights[s.id]
+        if (typeof w === 'number') weightArg[parseInt(s.id)] = w
+      })
 
       try {
-        const results = await api.intersect(seedIds, exclude)
+        const results = await api.intersect(seedIds, exclude, weightArg)
         const positions = clusterPositions(mid.x, mid.y, results.length)
         const now = Date.now()
 
@@ -284,6 +303,41 @@ export function useGraph() {
     [runIntersect, nodes.length]
   )
 
+  // Remove a single node from the canvas (used when permanently excluding).
+  const removeNode = useCallback((id) => {
+    const k = String(id)
+    lastTouchedRef.current.delete(k)
+    setNodes((prev) => prev.filter((n) => n.id !== k))
+    setLinks((prev) =>
+      prev.filter((l) => {
+        const s = typeof l.source === 'object' ? l.source.id : l.source
+        const t = typeof l.target === 'object' ? l.target.id : l.target
+        return s !== k && t !== k
+      })
+    )
+    setIntersectResultIds((prev) => {
+      if (!prev.has(k)) return prev
+      const next = new Set(prev)
+      next.delete(k)
+      return next
+    })
+    setSelectedNode((prev) => (prev?.id === k ? null : prev))
+  }, [])
+
+  // Update one seed's weight then re-run intersect (debounced).
+  const weightDebounceRef = useRef(null)
+  const setSeedWeight = useCallback((id, weight) => {
+    const k = String(id)
+    setSeedWeights((prev) => ({
+      ...prev,
+      [k]: Math.max(0.2, Math.min(1, weight)),
+    }))
+    if (weightDebounceRef.current) clearTimeout(weightDebounceRef.current)
+    weightDebounceRef.current = setTimeout(() => {
+      if (seedsRef.current.length >= 2) runIntersect(seedsRef.current)
+    }, 350)
+  }, [])
+
   const clearCanvas = useCallback(() => {
     setNodes([])
     setLinks([])
@@ -345,5 +399,9 @@ export function useGraph() {
     touchNode,
     restoreArchived,
     loadConstellation,
+    removeNode,
+    seedWeights,
+    setSeedWeight,
+    runIntersect,
   }
 }

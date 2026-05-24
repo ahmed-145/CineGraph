@@ -8,6 +8,7 @@ import SaveBar from './components/SaveBar'
 import { useGraph } from './hooks/useGraph'
 import { useAuth } from './hooks/useAuth'
 import { useConstellations, serializeCanvas } from './hooks/useConstellations'
+import { usePreferences } from './hooks/usePreferences'
 
 function moodHslFor(id) {
   const hue = (parseInt(id, 10) * 137) % 360
@@ -85,6 +86,27 @@ function NodeHoverCard({
   )
 }
 
+function Onboarding({ step, onDismiss }) {
+  // 0 = before first summon (search-bar placeholder handles this)
+  // 1 = after first summon (prompt to expand)
+  // 2 = after first expand (prompt to add 2nd seed)
+  // 3 = after first intersect (prompt to save)
+  // >=4 = done / dismissed
+  if (step < 1 || step >= 4) return null
+  const messages = {
+    1: 'Hover any node and click expand — see what lives near it.',
+    2: 'Pick two films as seeds — find what lives between them.',
+    3: 'Save your constellation from the top-right menu.',
+  }
+  return (
+    <div className="onboard-tip" data-step={step}>
+      <span className="onboard-step">{step} / 3</span>
+      <span className="onboard-msg">{messages[step]}</span>
+      <button className="onboard-dismiss" onClick={onDismiss} title="Dismiss">×</button>
+    </div>
+  )
+}
+
 function Starfield() {
   const stars = useRef(null)
   if (!stars.current) {
@@ -119,6 +141,7 @@ function Starfield() {
 export default function App() {
   const graphRef = useRef()
   const auth = useAuth()
+  const prefs = usePreferences()
   const {
     graphData,
     seeds,
@@ -137,12 +160,32 @@ export default function App() {
     touchNode,
     restoreArchived,
     loadConstellation,
-  } = useGraph()
+    removeNode,
+    seedWeights,
+    setSeedWeight,
+  } = useGraph(prefs.excluded)
 
   const constellations = useConstellations(auth.token)
 
   const [showAuth, setShowAuth] = useState(false)
   const [currentConstellationId, setCurrentConstellationId] = useState(null)
+  const autoLoadedRef = useRef(false)
+
+  // ── auto-load last active constellation on sign-in ────────────────────────
+  useEffect(() => {
+    if (!auth.user || autoLoadedRef.current) return
+    if (!prefs.lastConstellationId) return
+    autoLoadedRef.current = true
+    constellations
+      .load(prefs.lastConstellationId)
+      .then((result) => {
+        if (result?.data) {
+          loadConstellation(result.data)
+          setCurrentConstellationId(result.id)
+        }
+      })
+      .catch(() => {})
+  }, [auth.user, prefs.lastConstellationId, constellations, loadConstellation])
 
   const isEmpty = graphData.nodes.length === 0
 
@@ -209,6 +252,17 @@ export default function App() {
   // ── genre highlight ─────────────────────────────────────────────────────────
   const [highlightedGenre, setHighlightedGenre] = useState(null)
 
+  // ── onboarding step advancement ────────────────────────────────────────────
+  useEffect(() => {
+    if (graphData.nodes.length >= 1) prefs.advanceOnboarding(1)
+  }, [graphData.nodes.length])
+  useEffect(() => {
+    if (expandedIds.size >= 1) prefs.advanceOnboarding(2)
+  }, [expandedIds])
+  useEffect(() => {
+    if (intersectResultIds.size >= 1) prefs.advanceOnboarding(3)
+  }, [intersectResultIds])
+
   // ── handlers ────────────────────────────────────────────────────────────────
   const handleSelect = useCallback(
     (film) => {
@@ -253,6 +307,22 @@ export default function App() {
     [removeSeed]
   )
 
+  const handleToggleWatchlist = useCallback(
+    (tmdb_id) => {
+      prefs.toggleWatchlist(tmdb_id)
+    },
+    [prefs]
+  )
+
+  const handleExcludeForever = useCallback(
+    (tmdb_id) => {
+      prefs.addExcluded(tmdb_id)
+      removeNode(tmdb_id)
+      setHoveredNode(null)
+    },
+    [prefs, removeNode]
+  )
+
   // ── constellation save / load / share ──────────────────────────────────────
   const handleSave = useCallback(async (name) => {
     const data = serializeCanvas(
@@ -260,14 +330,16 @@ export default function App() {
     )
     const result = await constellations.save(name, data, currentConstellationId)
     setCurrentConstellationId(result.id)
-  }, [graphData, seeds, intersectResultIds, expandedIds, currentConstellationId, constellations])
+    prefs.setLastConstellationId(result.id)
+  }, [graphData, seeds, intersectResultIds, expandedIds, currentConstellationId, constellations, prefs])
 
   const handleLoad = useCallback(async (id) => {
     const result = await constellations.load(id)
     loadConstellation(result.data)
     setCurrentConstellationId(result.id)
+    prefs.setLastConstellationId(result.id)
     setSelectedNode(null)
-  }, [constellations, loadConstellation, setSelectedNode])
+  }, [constellations, loadConstellation, setSelectedNode, prefs])
 
   const handleShare = useCallback(async () => {
     if (!currentConstellationId) {
@@ -329,6 +401,7 @@ export default function App() {
           onNodeClick={handleNodeClick}
           onNodeHover={handleNodeHover}
           graphRef={graphRef}
+          watchlist={prefs.watchlist}
         />
       </div>
 
@@ -365,6 +438,8 @@ export default function App() {
             archivedCount={archivedNodes.length}
             onRestoreArchived={restoreArchived}
             resultCount={intersectResultIds.size}
+            seedWeights={seedWeights}
+            onSeedWeight={setSeedWeight}
           />
         </div>
       )}
@@ -416,8 +491,31 @@ export default function App() {
             expandedIds={expandedIds}
             highlightedGenre={highlightedGenre}
             onHighlightGenre={setHighlightedGenre}
+            isOnWatchlist={prefs.watchlist.has(String(selectedNode.id))}
+            isExcluded={prefs.excluded.has(String(selectedNode.id))}
+            onToggleWatchlist={handleToggleWatchlist}
+            onExcludeForever={handleExcludeForever}
           />
         </div>
+      )}
+
+      <Onboarding
+        step={prefs.onboardingStep}
+        onDismiss={prefs.dismissOnboarding}
+      />
+
+      {prefs.excluded.size > 0 && (
+        <button
+          className="excluded-counter"
+          onClick={() => {
+            if (confirm(`Reset ${prefs.excluded.size} permanently-excluded film(s)?`)) {
+              [...prefs.excluded].forEach((id) => prefs.removeExcluded(id))
+            }
+          }}
+          title="Click to reset"
+        >
+          {prefs.excluded.size} excluded
+        </button>
       )}
 
       {showAuth && <AuthModal auth={auth} onClose={() => setShowAuth(false)} />}

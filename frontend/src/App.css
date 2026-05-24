@@ -1614,6 +1614,143 @@ body {
   padding: 8px 0;
 }
 
+/* ── Detail panel secondary actions (watchlist + exclude) ────────────────── */
+.detail-secondary {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.detail-secondary-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 7px 10px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--ink-mid);
+  font-family: inherit;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background 150ms, color 150ms, border-color 150ms, transform 100ms var(--ease);
+}
+.detail-secondary-btn:hover { background: rgba(255,255,255,0.07); color: var(--ink); border-color: var(--border-mid); }
+.detail-secondary-btn:active { transform: scale(0.97); }
+.detail-secondary-btn svg { width: 12px; height: 12px; opacity: 0.85; }
+.detail-secondary-btn--on {
+  background: rgba(255,214,107,0.10);
+  border-color: rgba(255,214,107,0.30);
+  color: var(--gold);
+}
+.detail-secondary-btn--on:hover { background: rgba(255,214,107,0.16); }
+.detail-secondary-btn--danger:hover { color: #ff8a8a; border-color: rgba(255,107,107,0.30); background: rgba(255,107,107,0.08); }
+
+/* ── Per-seed weight slider ──────────────────────────────────────────────── */
+.hud-seed-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.hud-weight {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 60px;
+  height: 3px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+.hud-weight::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+  border: 0;
+  cursor: pointer;
+}
+.hud-weight::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+  border: 0;
+  cursor: pointer;
+}
+
+/* ── Onboarding tip (bottom-center pill) ─────────────────────────────────── */
+.onboard-tip {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px 9px 12px;
+  background: rgba(20,20,20,0.85);
+  border: 1px solid rgba(0,255,209,0.20);
+  border-radius: var(--radius-pill);
+  backdrop-filter: blur(12px);
+  font-size: 12px;
+  color: var(--ink-soft);
+  letter-spacing: 0.01em;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.5), 0 0 20px rgba(0,255,209,0.04);
+  animation: onboardIn 320ms var(--ease);
+}
+@keyframes onboardIn {
+  from { opacity: 0; transform: translate(-50%, 12px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+.onboard-step {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  color: var(--cyan);
+  text-transform: uppercase;
+}
+.onboard-msg { color: var(--ink); }
+.onboard-dismiss {
+  background: none;
+  border: 0;
+  color: var(--ink-faint);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+  transition: color 120ms;
+}
+.onboard-dismiss:hover { color: var(--ink); }
+
+/* ── Excluded counter (clickable to reset) ───────────────────────────────── */
+.excluded-counter {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translate(-50%, -42px);
+  z-index: 9;
+  padding: 3px 9px;
+  background: rgba(255,107,107,0.06);
+  border: 1px solid rgba(255,107,107,0.18);
+  border-radius: var(--radius-pill);
+  color: #ff9a9a;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 150ms;
+}
+.excluded-counter:hover { background: rgba(255,107,107,0.12); }
+
 /* ── scrollbar ────────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }

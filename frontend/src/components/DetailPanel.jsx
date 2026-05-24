@@ -14,6 +14,10 @@ export default function DetailPanel({
   expandedIds,
   highlightedGenre,
   onHighlightGenre,
+  isOnWatchlist,
+  isExcluded,
+  onToggleWatchlist,
+  onExcludeForever,
 }) {
   const [explanation, setExplanation] = useState(null)
   const [loadingExplain, setLoadingExplain] = useState(false)
@@ -187,6 +191,31 @@ export default function DetailPanel({
             Add as seed
           </button>
         ) : null}
+      </div>
+
+      {/* Secondary actions: watchlist + permanent exclusion */}
+      <div className="detail-secondary">
+        <button
+          className={`detail-secondary-btn ${isOnWatchlist ? 'detail-secondary-btn--on' : ''}`}
+          onClick={() => onToggleWatchlist?.(node.tmdb_id)}
+          title={isOnWatchlist ? 'Remove from watchlist' : 'Add to watchlist'}
+        >
+          <svg viewBox="0 0 24 24" fill={isOnWatchlist ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+            <polygon points="12 2 15 9 22 9.5 17 14.5 18.5 22 12 18 5.5 22 7 14.5 2 9.5 9 9 12 2" />
+          </svg>
+          {isOnWatchlist ? 'On watchlist' : 'Want to watch'}
+        </button>
+        <button
+          className="detail-secondary-btn detail-secondary-btn--danger"
+          onClick={() => onExcludeForever?.(node.tmdb_id)}
+          title="Never show me films like this"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+          </svg>
+          Never show
+        </button>
       </div>
     </div>
   )
