@@ -62,6 +62,7 @@ export default function Canvas({
   highlightedGenre,
   onNodeClick,
   onNodeHover,
+  onNodeRightClick,
   graphRef,
   watchlist = new Set(),
 }) {
@@ -400,6 +401,7 @@ export default function Canvas({
         linkCanvasObjectMode={() => 'replace'}
         onNodeClick={onNodeClick}
         onNodeHover={onNodeHover}
+        onNodeRightClick={onNodeRightClick}
         onNodeDrag={handleNodeDrag}
         onNodeDragEnd={handleNodeDragEnd}
         onEngineStop={handleEngineStop}

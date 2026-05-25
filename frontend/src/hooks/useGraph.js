@@ -28,15 +28,43 @@ function midpoint(nodes) {
   }
 }
 
-export function useGraph(excludedSet = new Set()) {
-  const [nodes, setNodes] = useState([])
-  const [links, setLinks] = useState([])
-  const [seeds, setSeeds] = useState([])
-  const [mode, setMode] = useState('idle')
+const ANON_KEY = 'cg.anonCanvas'
+
+function hydrateFromStorage() {
+  try {
+    const raw = localStorage.getItem(ANON_KEY)
+    if (!raw) return null
+    const data = JSON.parse(raw)
+    if (!data || !Array.isArray(data.nodes)) return null
+    return data
+  } catch {
+    return null
+  }
+}
+
+export function useGraph(excludedSet = new Set(), watchlistSet = new Set()) {
+  const hydrated = typeof window !== 'undefined' ? hydrateFromStorage() : null
+
+  const [nodes, setNodes] = useState(() =>
+    (hydrated?.nodes || []).map((n) => ({ ...n, id: String(n.id ?? n.tmdb_id), fx: n.x, fy: n.y }))
+  )
+  const [links, setLinks] = useState(() =>
+    (hydrated?.links || []).map((l) => ({
+      ...l,
+      source: typeof l.source === 'object' ? l.source.id : String(l.source),
+      target: typeof l.target === 'object' ? l.target.id : String(l.target),
+    }))
+  )
+  const [seeds, setSeeds] = useState(() => hydrated?.seeds || [])
+  const [mode, setMode] = useState(() => hydrated?.mode || 'idle')
   const [selectedNode, setSelectedNode] = useState(null)
   const [loading, setLoading] = useState(false)
-  const [intersectResultIds, setIntersectResultIds] = useState(new Set())
-  const [expandedIds, setExpandedIds] = useState(new Set())
+  const [intersectResultIds, setIntersectResultIds] = useState(
+    () => new Set((hydrated?.intersectResultIds || []).map(String))
+  )
+  const [expandedIds, setExpandedIds] = useState(
+    () => new Set((hydrated?.expandedIds || []).map(String))
+  )
   const [archivedNodes, setArchivedNodes] = useState([])
   // Per-seed weight 0.2..1.0 keyed by seed id. Default 1.0.
   const [seedWeights, setSeedWeights] = useState({})
@@ -54,6 +82,34 @@ export function useGraph(excludedSet = new Set()) {
 
   const getNode = useCallback((id) => nodesRef.current.find((n) => n.id === String(id)), [])
 
+  // Persist anonymous canvas state on every change. For signed-in users this
+  // still runs, but the server-side constellation save is authoritative.
+  useEffect(() => {
+    try {
+      if (nodes.length === 0 && seeds.length === 0) {
+        localStorage.removeItem(ANON_KEY)
+        return
+      }
+      const payload = {
+        nodes: nodes.map((n) => ({
+          ...n,
+          x: n.x ?? n.fx ?? 0,
+          y: n.y ?? n.fy ?? 0,
+        })),
+        links: links.map((l) => ({
+          ...l,
+          source: typeof l.source === 'object' ? l.source.id : l.source,
+          target: typeof l.target === 'object' ? l.target.id : l.target,
+        })),
+        seeds,
+        mode,
+        intersectResultIds: [...intersectResultIds],
+        expandedIds: [...expandedIds],
+      }
+      localStorage.setItem(ANON_KEY, JSON.stringify(payload))
+    } catch {}
+  }, [nodes, links, seeds, mode, intersectResultIds, expandedIds])
+
   const touchNode = useCallback((id) => {
     lastTouchedRef.current.set(String(id), Date.now())
   }, [])
@@ -68,6 +124,7 @@ export function useGraph(excludedSet = new Set()) {
       (n) =>
         !seedIds.has(n.id) &&
         n.type !== 'intersect_result' &&
+        !watchlistSet.has(n.id) &&
         (now - (lastTouchedRef.current.get(n.id) || 0)) > TOUCH_GRACE_MS
     )
     if (!eligible.length) return

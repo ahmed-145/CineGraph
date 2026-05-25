@@ -18,10 +18,15 @@ export default function DetailPanel({
   isExcluded,
   onToggleWatchlist,
   onExcludeForever,
+  graphNodes = [],
+  onSelectFilm,
 }) {
   const [explanation, setExplanation] = useState(null)
   const [loadingExplain, setLoadingExplain] = useState(false)
   const [providers, setProviders] = useState(null)
+  const [similarOnCanvas, setSimilarOnCanvas] = useState([])
+  const [similarUndiscovered, setSimilarUndiscovered] = useState([])
+  const [loadingSimilar, setLoadingSimilar] = useState(false)
 
   const isSeed = seeds.some((s) => s.id === node.id)
   const seedEntry = seeds.find((s) => s.id === node.id)
@@ -51,13 +56,38 @@ export default function DetailPanel({
     }
   }, [node.tmdb_id])
 
+  const fetchSimilar = useCallback(async () => {
+    setLoadingSimilar(true)
+    try {
+      // Pull a wider neighborhood, then partition into on-canvas vs undiscovered
+      const results = await api.expand(node.tmdb_id, [], 0)
+      const onCanvasIds = new Set(graphNodes.map((n) => String(n.id ?? n.tmdb_id)))
+      const onCanvas = []
+      const off = []
+      for (const r of results || []) {
+        if (String(r.tmdb_id) === String(node.tmdb_id)) continue
+        ;(onCanvasIds.has(String(r.tmdb_id)) ? onCanvas : off).push(r)
+      }
+      setSimilarOnCanvas(onCanvas.slice(0, 5))
+      setSimilarUndiscovered(off.slice(0, 5))
+    } catch {
+      setSimilarOnCanvas([])
+      setSimilarUndiscovered([])
+    } finally {
+      setLoadingSimilar(false)
+    }
+  }, [node.tmdb_id, graphNodes])
+
   useEffect(() => {
     setExplanation(null)
     setProviders(null)
+    setSimilarOnCanvas([])
+    setSimilarUndiscovered([])
     if (seedIds.length >= 2 && !seedIds.includes(node.tmdb_id)) {
       fetchExplanation()
     }
     fetchProviders()
+    fetchSimilar()
   }, [node.id])
 
   const topScore = node.seedScores
@@ -141,6 +171,59 @@ export default function DetailPanel({
               <span className="detail-explain-label">Why it's here</span>
               <p>{explanation}</p>
             </>
+          )}
+        </div>
+      )}
+
+      {/* Similar films — on canvas + undiscovered */}
+      {(similarOnCanvas.length > 0 || similarUndiscovered.length > 0 || loadingSimilar) && (
+        <div className="detail-similar">
+          {similarOnCanvas.length > 0 && (
+            <>
+              <span className="detail-section-label">On this canvas</span>
+              <div className="detail-similar-list">
+                {similarOnCanvas.map((f) => (
+                  <button
+                    key={f.tmdb_id}
+                    className="detail-similar-item"
+                    onClick={() => onSelectFilm?.(f)}
+                  >
+                    {f.poster_path ? (
+                      <img src={`https://image.tmdb.org/t/p/w92${f.poster_path}`} alt="" className="detail-similar-thumb" />
+                    ) : (
+                      <div className="detail-similar-thumb detail-similar-thumb--ph" />
+                    )}
+                    <span className="detail-similar-title">{f.title}</span>
+                    <span className="detail-similar-score">{(f.score || 0).toFixed(2)}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+          {similarUndiscovered.length > 0 && (
+            <>
+              <span className="detail-section-label">Undiscovered</span>
+              <div className="detail-similar-list">
+                {similarUndiscovered.map((f) => (
+                  <button
+                    key={f.tmdb_id}
+                    className="detail-similar-item"
+                    onClick={() => onSelectFilm?.(f)}
+                  >
+                    {f.poster_path ? (
+                      <img src={`https://image.tmdb.org/t/p/w92${f.poster_path}`} alt="" className="detail-similar-thumb" />
+                    ) : (
+                      <div className="detail-similar-thumb detail-similar-thumb--ph" />
+                    )}
+                    <span className="detail-similar-title">{f.title}</span>
+                    <span className="detail-similar-score detail-similar-score--new">+</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+          {loadingSimilar && (
+            <div className="detail-explain-loading">Finding neighbours…</div>
           )}
         </div>
       )}

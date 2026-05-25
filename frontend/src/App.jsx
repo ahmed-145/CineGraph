@@ -86,6 +86,49 @@ function NodeHoverCard({
   )
 }
 
+function LandingIntro({ onStart }) {
+  return (
+    <div className="landing">
+      <div className="landing-stars">
+        {Array.from({ length: 80 }).map((_, i) => {
+          const s = ((i * 9301 + 49297) % 233280) / 233280
+          const s2 = ((i * 137 + 9) % 233280) / 233280
+          const s3 = ((i * 211 + 13) % 233280) / 233280
+          return (
+            <div
+              key={i}
+              className="landing-star"
+              style={{
+                left: `${s * 100}%`,
+                top: `${s2 * 100}%`,
+                opacity: 0.2 + s3 * 0.6,
+                width: s3 > 0.92 ? 2 : 1,
+                height: s3 > 0.92 ? 2 : 1,
+              }}
+            />
+          )
+        })}
+      </div>
+      <div className="landing-content">
+        <div className="landing-tag">A canvas of cinema</div>
+        <div className="landing-title">
+          Cine<span className="accent">Graph</span>
+        </div>
+        <p className="landing-blurb">
+          Discover films by intersection — the exact point in cinema between
+          <span className="accent"> Whiplash</span>,
+          <span className="accent"> Parasite</span>, and
+          <span className="accent"> Amélie</span>.
+        </p>
+        <button className="landing-cta" onClick={onStart}>Start with any film →</button>
+        <div className="landing-meta">
+          10,003 films · 3-axis semantic search · zero-friction · no signup required
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Onboarding({ step, onDismiss }) {
   // 0 = before first summon (search-bar placeholder handles this)
   // 1 = after first summon (prompt to expand)
@@ -163,13 +206,21 @@ export default function App() {
     removeNode,
     seedWeights,
     setSeedWeight,
-  } = useGraph(prefs.excluded)
+  } = useGraph(prefs.excluded, prefs.watchlist)
 
   const constellations = useConstellations(auth.token)
 
   const [showAuth, setShowAuth] = useState(false)
   const [currentConstellationId, setCurrentConstellationId] = useState(null)
   const autoLoadedRef = useRef(false)
+  const [showLanding, setShowLanding] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return !localStorage.getItem('cg.landed')
+  })
+  const dismissLanding = useCallback(() => {
+    localStorage.setItem('cg.landed', '1')
+    setShowLanding(false)
+  }, [])
 
   // ── auto-load last active constellation on sign-in ────────────────────────
   useEffect(() => {
@@ -236,6 +287,26 @@ export default function App() {
   const hovCanAddSeed = hoveredNode && !hovIsSeed && seeds.length < 5
   const hovIsExpanded = hoveredNode && expandedIds.has(hoveredNode.id)
 
+  // ── right-click context menu ───────────────────────────────────────────────
+  const [contextMenu, setContextMenu] = useState(null) // { node, x, y }
+
+  const handleNodeRightClick = useCallback((node, event) => {
+    if (event?.preventDefault) event.preventDefault()
+    setContextMenu({ node, x: event.clientX, y: event.clientY })
+    setHoveredNode(null)
+  }, [])
+
+  useEffect(() => {
+    if (!contextMenu) return
+    const close = () => setContextMenu(null)
+    document.addEventListener('click', close)
+    document.addEventListener('contextmenu', close, { capture: false })
+    return () => {
+      document.removeEventListener('click', close)
+      document.removeEventListener('contextmenu', close, { capture: false })
+    }
+  }, [contextMenu])
+
   // ── soft cap toast ──────────────────────────────────────────────────────────
   const capToastShownRef = useRef(false)
   const [showCapToast, setShowCapToast] = useState(false)
@@ -262,6 +333,32 @@ export default function App() {
   useEffect(() => {
     if (intersectResultIds.size >= 1) prefs.advanceOnboarding(3)
   }, [intersectResultIds])
+
+  // ── post-intersect "Sign up to save" soft prompt (PRD §7.1 step 10) ────────
+  const [signupPrompt, setSignupPrompt] = useState(false)
+  const signupPromptShownRef = useRef(false)
+  useEffect(() => {
+    if (signupPromptShownRef.current) return
+    if (auth.user) return
+    if (intersectResultIds.size < 1) return
+    if (localStorage.getItem('cg.signupPromptShown')) return
+    signupPromptShownRef.current = true
+    localStorage.setItem('cg.signupPromptShown', '1')
+    setTimeout(() => setSignupPrompt(true), 1500)
+  }, [intersectResultIds.size, auth.user])
+
+  // ── mode-shift transition flag (PRD §5.4 — 400ms choreographed) ────────────
+  const [modeTransition, setModeTransition] = useState(false)
+  const prevModeRef = useRef(mode)
+  useEffect(() => {
+    if (prevModeRef.current !== 'intersecting' && mode === 'intersecting') {
+      setModeTransition(true)
+      const t = setTimeout(() => setModeTransition(false), 420)
+      prevModeRef.current = mode
+      return () => clearTimeout(t)
+    }
+    prevModeRef.current = mode
+  }, [mode])
 
   // ── handlers ────────────────────────────────────────────────────────────────
   const handleSelect = useCallback(
@@ -389,6 +486,7 @@ export default function App() {
     >
       <Starfield />
       <div className={`intersection-fog ${mode === 'intersecting' ? 'intersection-fog--on' : ''}`} />
+      {modeTransition && <div className="mode-shift-flash" />}
 
       <div className="canvas-layer">
         <Canvas
@@ -400,6 +498,7 @@ export default function App() {
           highlightedGenre={highlightedGenre}
           onNodeClick={handleNodeClick}
           onNodeHover={handleNodeHover}
+          onNodeRightClick={handleNodeRightClick}
           graphRef={graphRef}
           watchlist={prefs.watchlist}
         />
@@ -495,7 +594,67 @@ export default function App() {
             isExcluded={prefs.excluded.has(String(selectedNode.id))}
             onToggleWatchlist={handleToggleWatchlist}
             onExcludeForever={handleExcludeForever}
+            graphNodes={graphData.nodes}
+            onSelectFilm={(film) => {
+              const existing = graphData.nodes.find((n) => String(n.id) === String(film.tmdb_id))
+              if (existing) {
+                setSelectedNode(existing)
+              } else {
+                summonFilm(film)
+                setSelectedNode({ ...film, id: String(film.tmdb_id) })
+              }
+            }}
           />
+        </div>
+      )}
+
+      {contextMenu && (
+        <div
+          className="ctx-menu"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            className="ctx-item"
+            onClick={() => {
+              handleExpand(contextMenu.node.tmdb_id)
+              setContextMenu(null)
+            }}
+          >Expand</button>
+          {seeds.some((s) => s.id === contextMenu.node.id) ? (
+            <button
+              className="ctx-item"
+              onClick={() => {
+                handleRemoveSeed(contextMenu.node.tmdb_id)
+                setContextMenu(null)
+              }}
+            >Remove seed</button>
+          ) : seeds.length < 5 ? (
+            <button
+              className="ctx-item"
+              onClick={() => {
+                handleAddSeed(contextMenu.node.tmdb_id)
+                setContextMenu(null)
+              }}
+            >Add as seed</button>
+          ) : null}
+          <button
+            className="ctx-item"
+            onClick={() => {
+              prefs.toggleWatchlist(contextMenu.node.tmdb_id)
+              setContextMenu(null)
+            }}
+          >
+            {prefs.watchlist.has(String(contextMenu.node.id)) ? 'Remove from watchlist' : 'Want to watch'}
+          </button>
+          <div className="ctx-divider" />
+          <button
+            className="ctx-item ctx-item--danger"
+            onClick={() => {
+              handleExcludeForever(contextMenu.node.tmdb_id)
+              setContextMenu(null)
+            }}
+          >Never show me films like this</button>
         </div>
       )}
 
@@ -503,6 +662,16 @@ export default function App() {
         step={prefs.onboardingStep}
         onDismiss={prefs.dismissOnboarding}
       />
+
+      {signupPrompt && !auth.user && (
+        <div className="signup-prompt">
+          <span>Sign up to save this constellation.</span>
+          <button className="signup-prompt-cta" onClick={() => { setShowAuth(true); setSignupPrompt(false) }}>
+            Sign up
+          </button>
+          <button className="signup-prompt-dismiss" onClick={() => setSignupPrompt(false)}>×</button>
+        </div>
+      )}
 
       {prefs.excluded.size > 0 && (
         <button
@@ -517,6 +686,8 @@ export default function App() {
           {prefs.excluded.size} excluded
         </button>
       )}
+
+      {showLanding && <LandingIntro onStart={dismissLanding} />}
 
       {showAuth && <AuthModal auth={auth} onClose={() => setShowAuth(false)} />}
 
