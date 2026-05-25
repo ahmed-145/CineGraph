@@ -403,7 +403,8 @@ export default function Canvas({
         onNodeDrag={handleNodeDrag}
         onNodeDragEnd={handleNodeDragEnd}
         onEngineStop={handleEngineStop}
-        cooldownTicks={150}
+        cooldownTicks={Infinity}
+        cooldownTime={Infinity}
         d3AlphaDecay={0.035}
         d3VelocityDecay={0.75}
         enableNodeDrag
