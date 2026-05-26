@@ -92,53 +92,62 @@ export default function Canvas({
     return () => el.removeEventListener('wheel', onWheel, { capture: true })
   }, [graphRef])
 
-  // Configure base forces once. We phase the link force later: high during
-  // the settle window so results bloom + spread organically between seeds,
-  // then near-zero after lock so dragging a seed doesn't yank neighbors.
+  // Base forces are configured so the *steady state* is correct: link force
+  // is weak (decorative) so dragging a seed doesn't yank neighbours as a
+  // block; collide force is at full strength so nodes can never penetrate
+  // each other when you push one against the other. The bloom-window effect
+  // below temporarily boosts link strength for the entry animation only.
   useEffect(() => {
     const fg = graphRef.current
     if (!fg) return
     fg.d3Force('center', null)
     fg.d3Force('charge')?.strength(-180).distanceMax(450)
-    fg.d3Force('link')?.distance(140).strength(0.30)
-    fg.d3Force('collide', forceCollide(NODE_R * 1.45).strength(0.85))
+    fg.d3Force('link')?.distance(140).strength(0.06)
+    fg.d3Force('collide', forceCollide(NODE_R * 1.55).strength(1.0).iterations(2))
   }, [graphRef])
 
-  // Newly placed expand children + intersect results arrive with `_pinned: true`.
-  // Stage 1 (t=0):     pinned at radial / cluster slots
-  // Stage 2 (t=700):   unpin and reheat; d3 alpha decays naturally so motion
-  //                    smoothly tapers to zero over ~3-4 seconds. No hard
-  //                    lock — block-yank during drag is prevented separately
-  //                    in handleNodeDrag (pins non-dragged neighbours).
+  // Bloom choreography for newly placed expand children + intersect results:
+  //   t=0     placed pinned at radial / cluster slots
+  //   t=700   unpin AND boost link strength → strong convergence pull toward
+  //           seeds, charge spreads them apart, full collide stops overlap;
+  //           sim re-heated so motion is unmistakable for several seconds
+  //   t=3500  link strength drops back to weak (0.06) so future seed drags
+  //           do NOT yank neighbours as a block. Collide stays at 1.0 so
+  //           pushing nodes into each other still cleanly displaces them.
   useEffect(() => {
     const pinned = graphData.nodes.filter((n) => n._pinned)
     if (!pinned.length) return
-    graphRef.current?.d3ReheatSimulation()
+    const fg = graphRef.current
+    if (!fg) return
+
+    fg.d3Force('link')?.strength(0.30)
+    fg.d3ReheatSimulation()
+
     const unpinTimer = setTimeout(() => {
       pinned.forEach((n) => {
         delete n.fx
         delete n.fy
         delete n._pinned
       })
-      graphRef.current?.d3ReheatSimulation()
+      fg.d3ReheatSimulation()
     }, 700)
-    return () => clearTimeout(unpinTimer)
+
+    const calmTimer = setTimeout(() => {
+      fg.d3Force('link')?.strength(0.06)
+    }, 3500)
+
+    return () => {
+      clearTimeout(unpinTimer)
+      clearTimeout(calmTimer)
+    }
   }, [graphData.nodes.length, graphRef, graphData.nodes])
 
   // ── single-node drag ──────────────────────────────────────────────────────
-  // react-force-graph's built-in d3-drag sets fx/fy on the dragged node each
-  // frame AND reheats the sim via alphaTarget(0.3). Without pinning other
-  // nodes, the link force would yank neighbours along ("block move"). We
-  // freeze every other node at its current position for the duration of the
-  // drag — only the dragged node moves.
-  const handleNodeDrag = useCallback((draggedNode) => {
-    if (!draggedNode) return
-    graphData.nodes.forEach((n) => {
-      if (n === draggedNode || n.id === draggedNode.id) return
-      if (n.fx == null) n.fx = n.x
-      if (n.fy == null) n.fy = n.y
-    })
-  }, [graphData.nodes])
+  // The library's built-in d3-drag handles the dragged node's fx/fy and
+  // alphaTarget. Steady-state link strength is 0.06 — too weak to yank
+  // neighbours as a block, while the full-strength collide force still lets
+  // nodes shove each other out of the way on contact. No manual pinning here.
+  const handleNodeDrag = useCallback(() => {}, [])
 
   const handleNodeDragEnd = useCallback((node) => {
     // Drag is authoritative — wherever you drop a node, that's where it stays.
