@@ -105,19 +105,15 @@ export default function Canvas({
   }, [graphRef])
 
   // Newly placed expand children + intersect results arrive with `_pinned: true`.
-  // Three-stage choreography:
-  //   t=0      placed pinned at radial / cluster slots
-  //   t=700    unpin → forces bloom them out / pull them between seeds
-  //   t=2500   lock every node + drop link strength to ~0 so dragging
-  //            a seed doesn't pull neighbours as a block.
+  // Stage 1 (t=0):     pinned at radial / cluster slots
+  // Stage 2 (t=700):   unpin and reheat; d3 alpha decays naturally so motion
+  //                    smoothly tapers to zero over ~3-4 seconds. No hard
+  //                    lock — block-yank during drag is prevented separately
+  //                    in handleNodeDrag (pins non-dragged neighbours).
   useEffect(() => {
     const pinned = graphData.nodes.filter((n) => n._pinned)
     if (!pinned.length) return
-
-    // Make sure link force is hot for the bloom
-    graphRef.current?.d3Force('link')?.strength(0.22)
     graphRef.current?.d3ReheatSimulation()
-
     const unpinTimer = setTimeout(() => {
       pinned.forEach((n) => {
         delete n.fx
@@ -126,26 +122,23 @@ export default function Canvas({
       })
       graphRef.current?.d3ReheatSimulation()
     }, 700)
-
-    const lockTimer = setTimeout(() => {
-      graphData.nodes.forEach((n) => {
-        n.fx = n.x
-        n.fy = n.y
-      })
-      // Edges become decorative after lock — drag becomes purely mechanical.
-      graphRef.current?.d3Force('link')?.strength(0.02)
-    }, 2500)
-
-    return () => {
-      clearTimeout(unpinTimer)
-      clearTimeout(lockTimer)
-    }
+    return () => clearTimeout(unpinTimer)
   }, [graphData.nodes.length, graphRef, graphData.nodes])
 
   // ── single-node drag ──────────────────────────────────────────────────────
   // react-force-graph's built-in d3-drag sets fx/fy on the dragged node each
-  // frame. Other nodes stay free and react to charge/link forces naturally.
-  const handleNodeDrag = useCallback(() => {}, [])
+  // frame AND reheats the sim via alphaTarget(0.3). Without pinning other
+  // nodes, the link force would yank neighbours along ("block move"). We
+  // freeze every other node at its current position for the duration of the
+  // drag — only the dragged node moves.
+  const handleNodeDrag = useCallback((draggedNode) => {
+    if (!draggedNode) return
+    graphData.nodes.forEach((n) => {
+      if (n === draggedNode || n.id === draggedNode.id) return
+      if (n.fx == null) n.fx = n.x
+      if (n.fy == null) n.fy = n.y
+    })
+  }, [graphData.nodes])
 
   const handleNodeDragEnd = useCallback((node) => {
     // Drag is authoritative — wherever you drop a node, that's where it stays.
