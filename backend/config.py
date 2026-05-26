@@ -10,7 +10,12 @@ class Settings(BaseSettings):
     # Phase-2 collection (text + vibe + visual). Optional — backend falls back
     # to qdrant_collection if this one does not exist.
     qdrant_collection_v2: str = "films_v2"
-    # Text embedding (Axis 1: metadata)
+    # Text embedding (Axis 1: metadata).
+    # PRD §6.1 calls for bge-large-en-v1.5 (1024d); we ship bge-base by default
+    # (768d) to keep the model footprint small. To match the PRD exactly:
+    #   embedding_model = "BAAI/bge-large-en-v1.5"
+    #   text_dim = 1024
+    # then re-run ingest.py and ingest_vibe.py.
     embedding_model: str = "BAAI/bge-base-en-v1.5"
     text_dim: int = 768
     # Vibe embedding (Axis 2: review-derived). Same model family; can be

@@ -23,7 +23,10 @@ Performance notes:
 """
 
 from __future__ import annotations
+import argparse
+import json
 import time
+from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -35,9 +38,11 @@ from qdrant_client.models import Distance, VectorParams, PointStruct
 
 from config import settings
 import vibe as vibe_mod
+import review_sources as rs
 
 
 BATCH_LOG = 25  # log every N films
+IDF_PATH = Path(__file__).parent / "vibe_idf_blocklist.json"
 
 
 def get_qdrant() -> QdrantClient:
@@ -108,7 +113,36 @@ def split_v1_vector(vec: list[float]) -> tuple[list[float], list[float]]:
     return vec[:td], vec[td : td + settings.visual_dim]
 
 
+def _all_tmdb_ids(client: QdrantClient) -> list[int]:
+    """Scroll v1 collection just for the tmdb_id list (cheap)."""
+    ids: list[int] = []
+    offset = None
+    while True:
+        result, offset = client.scroll(
+            collection_name=settings.qdrant_collection,
+            limit=512,
+            offset=offset,
+            with_payload=["tmdb_id"],
+            with_vectors=False,
+        )
+        for p in result:
+            tid = p.payload.get("tmdb_id")
+            if tid is not None:
+                ids.append(tid)
+        if offset is None:
+            break
+    return ids
+
+
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--tfidf", action="store_true",
+        help="Run an extra pass first to compute the TF-IDF high-DF blocklist "
+             "(PRD §6.1 stage 3). Saves to vibe_idf_blocklist.json.",
+    )
+    args = parser.parse_args()
+
     print("=== CineGraph Phase 2 (vibe axis) ===\n")
     client = get_qdrant()
 
@@ -128,7 +162,45 @@ def main():
     print(f"  {settings.vibe_model} ({settings.vibe_dim}-d)\n")
 
     nlp = vibe_mod._load_spacy(settings.spacy_model)
-    print(f"NER scrubber: {'spaCy ' + (nlp.meta['name'] if nlp else '(unavailable, regex fallback)')}\n")
+    print(f"NER scrubber: {'spaCy ' + (nlp.meta['name'] if nlp else '(unavailable, regex fallback)')}")
+
+    sources = rs.default_sources(settings.tmdb_api_key)
+    avail = rs.availability_report(sources)
+    print(f"Review sources: {avail}\n")
+
+    # Optional pass-1: TF-IDF blocklist
+    blocklist: set[str] = set()
+    if args.tfidf:
+        if IDF_PATH.exists():
+            try:
+                blocklist = set(json.loads(IDF_PATH.read_text()))
+                print(f"Loaded TF-IDF blocklist from disk: {len(blocklist)} tokens\n")
+            except Exception:
+                blocklist = set()
+        if not blocklist:
+            print("Running TF-IDF pre-pass (collecting global document frequency)...")
+            all_ids = _all_tmdb_ids(client)
+            t0 = time.time()
+            def _iter():
+                for i, tid in enumerate(all_ids):
+                    if i % 250 == 0 and i:
+                        elapsed = time.time() - t0
+                        print(f"  TF-IDF pass: {i}/{len(all_ids)} "
+                              f"({i / max(elapsed,1e-6):.2f} films/s)")
+                    yield tid, rs.cascading_reviews(tid, sources)
+            blocklist = vibe_mod.compute_tfidf_blocklist(
+                _iter(), df_threshold=0.80, min_doc_count=50,
+                spacy_model=settings.spacy_model,
+            )
+            IDF_PATH.write_text(json.dumps(sorted(blocklist), indent=0))
+            print(f"  → {len(blocklist)} tokens blocklisted, saved to {IDF_PATH.name}\n")
+    elif IDF_PATH.exists():
+        # If a previous run computed it, reuse silently
+        try:
+            blocklist = set(json.loads(IDF_PATH.read_text()))
+            print(f"Using existing TF-IDF blocklist: {len(blocklist)} tokens\n")
+        except Exception:
+            blocklist = set()
 
     total_count = client.count(settings.qdrant_collection).count
     print(f"Phase-1 collection has {total_count} films. Processing...\n")
@@ -145,9 +217,7 @@ def main():
             continue
 
         try:
-            reviews = vibe_mod.fetch_tmdb_reviews(
-                tid, settings.tmdb_api_key, max_pages=settings.vibe_review_max_pages
-            )
+            reviews = rs.cascading_reviews(tid, sources)
         except Exception as e:
             print(f"  [{tid}] review fetch failed: {e}")
             reviews = []
@@ -158,6 +228,7 @@ def main():
             vibe_dim=settings.vibe_dim,
             spacy_model=settings.spacy_model,
             chunk_words_max=settings.vibe_chunk_words,
+            tfidf_blocklist=blocklist or None,
         )
 
         text_part, visual_part = split_v1_vector(vec)

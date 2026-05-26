@@ -14,7 +14,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastembed import TextEmbedding, ImageEmbedding
 from pydantic import BaseModel
 from qdrant_client import QdrantClient
-from qdrant_client.models import Filter, FieldCondition, MatchAny, PointStruct, VectorParams, Distance
+from qdrant_client.models import (
+    Filter, FieldCondition, MatchAny, MatchValue, Range,
+    PointStruct, VectorParams, Distance,
+)
 
 load_dotenv()
 from config import settings
@@ -131,11 +134,21 @@ app.add_middleware(
 
 
 # ── schemas ────────────────────────────────────────────────────────────────────
+class PayloadFilters(BaseModel):
+    """PRD §6.2 — optional payload-level filters applied at query time."""
+    decade_min: int | None = None     # e.g. 1990 keeps films from 1990+
+    decade_max: int | None = None     # e.g. 2020 keeps films up to 2029
+    languages: list[str] = []         # e.g. ["en", "ko"]; empty = any
+    runtime_min: int | None = None    # minutes
+    runtime_max: int | None = None
+
+
 class ExpandRequest(BaseModel):
     tmdb_id: int
     limit: int = 10
     offset: int = 0
     exclude_ids: list[int] = []
+    filters: PayloadFilters = PayloadFilters()
 
 
 class IntersectRequest(BaseModel):
@@ -143,6 +156,7 @@ class IntersectRequest(BaseModel):
     limit: int = 12
     weights: dict[int, float] = {}
     exclude_ids: list[int] = []
+    filters: PayloadFilters = PayloadFilters()
 
 
 class ExplainRequest(BaseModel):
@@ -151,10 +165,39 @@ class ExplainRequest(BaseModel):
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
-def _make_exclude_filter(exclude_ids: list[int]) -> Optional[Filter]:
-    if not exclude_ids:
+def _make_filter(exclude_ids: list[int], pf: PayloadFilters | None = None) -> Optional[Filter]:
+    pf = pf or PayloadFilters()
+    must: list[FieldCondition] = []
+    must_not: list[FieldCondition] = []
+
+    if exclude_ids:
+        must_not.append(FieldCondition(key="tmdb_id", match=MatchAny(any=exclude_ids)))
+
+    if pf.decade_min is not None or pf.decade_max is not None:
+        rng = {}
+        if pf.decade_min is not None: rng["gte"] = pf.decade_min
+        if pf.decade_max is not None: rng["lte"] = pf.decade_max + 9
+        must.append(FieldCondition(key="year", range=Range(**rng)))
+
+    if pf.languages:
+        must.append(FieldCondition(
+            key="original_language", match=MatchAny(any=list(pf.languages))
+        ))
+
+    if pf.runtime_min is not None or pf.runtime_max is not None:
+        rng = {}
+        if pf.runtime_min is not None: rng["gte"] = pf.runtime_min
+        if pf.runtime_max is not None: rng["lte"] = pf.runtime_max
+        must.append(FieldCondition(key="runtime", range=Range(**rng)))
+
+    if not must and not must_not:
         return None
-    return Filter(must_not=[FieldCondition(key="tmdb_id", match=MatchAny(any=exclude_ids))])
+    return Filter(must=must or None, must_not=must_not or None)
+
+
+# Back-compat alias for older call sites
+def _make_exclude_filter(exclude_ids: list[int]) -> Optional[Filter]:
+    return _make_filter(exclude_ids)
 
 
 def _payload_to_film(payload: dict, score: float = 0.0, scores: dict = None) -> dict:
@@ -339,7 +382,7 @@ def expand(req: ExpandRequest):
         positive=[req.tmdb_id],
         limit=req.limit + req.offset,
         with_payload=True,
-        query_filter=_make_exclude_filter(blocked),
+        query_filter=_make_filter(blocked, req.filters),
     )
     return [_payload_to_film(r.payload, r.score) for r in results[req.offset:]]
 
@@ -350,7 +393,7 @@ async def intersect(req: IntersectRequest):
         raise HTTPException(400, "Need at least 2 seeds")
 
     blocked = list(set(req.seed_ids + req.exclude_ids))
-    exclude_filter = _make_exclude_filter(blocked)
+    exclude_filter = _make_filter(blocked, req.filters)
     valid_seeds = [sid for sid in req.seed_ids if sid in FILM_INDEX]
 
     loop = asyncio.get_event_loop()

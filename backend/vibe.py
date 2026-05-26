@@ -145,14 +145,55 @@ def scrub_entities(text: str, spacy_model: str = "en_core_web_lg") -> str:
     return " ".join(keep)
 
 
-def clean_text(text: str) -> str:
-    """Strip HTML, URLs, punctuation, stopwords, lowercase, collapse whitespace."""
+def clean_text(text: str, extra_stopwords: set[str] | None = None) -> str:
+    """Strip HTML, URLs, punctuation, stopwords, lowercase, collapse whitespace.
+
+    `extra_stopwords`: additional tokens to drop. Used to apply the TF-IDF
+    high-DF blocklist computed across the full review corpus.
+    """
     text = _HTML_TAG_RE.sub(" ", text)
     text = _URL_RE.sub(" ", text)
     text = _NON_LETTER_RE.sub(" ", text)
     text = text.lower()
-    tokens = [t for t in text.split() if t and t not in CINEMATIC_STOPWORDS and len(t) > 1]
+    blocklist = CINEMATIC_STOPWORDS if extra_stopwords is None else (CINEMATIC_STOPWORDS | extra_stopwords)
+    tokens = [t for t in text.split() if t and t not in blocklist and len(t) > 1]
     return " ".join(tokens)
+
+
+def compute_tfidf_blocklist(film_review_iter, df_threshold: float = 0.80,
+                            min_doc_count: int = 50,
+                            spacy_model: str = "en_core_web_lg") -> set[str]:
+    """Pass-1 stage of the TF-IDF pipeline (PRD §6.1 stage 3).
+
+    Given an iterable yielding `(tmdb_id, list_of_reviews)` per film, compute
+    document frequency for every token (where a "document" is one film's
+    concatenated review text). Returns the set of tokens whose DF exceeds
+    `df_threshold` × N — those will be dropped in pass 2 to amplify rare
+    stylistic adjectives ("hallucinatory", "cozy", "liminal").
+
+    Only tokens that appear in ≥ `min_doc_count` films are considered for the
+    blocklist — prevents accidentally banning long-tail vocabulary that just
+    happened to land in a few corpus samples.
+    """
+    df: dict[str, int] = {}
+    n_films = 0
+    for tmdb_id, reviews in film_review_iter:
+        n_films += 1
+        joined = " ".join(r for r in reviews if r)
+        if not joined.strip():
+            continue
+        scrubbed = scrub_entities(joined, spacy_model)
+        cleaned = clean_text(scrubbed)  # no extra_stopwords on pass 1
+        unique = set(cleaned.split())
+        for t in unique:
+            df[t] = df.get(t, 0) + 1
+    if n_films == 0:
+        return set()
+    threshold_count = max(int(n_films * df_threshold), 1)
+    return {
+        token for token, count in df.items()
+        if count >= threshold_count and count >= min_doc_count
+    }
 
 
 def chunk_words(text: str, max_words: int = 380) -> list[str]:
@@ -177,15 +218,16 @@ def build_vibe_vector(
     vibe_dim: int,
     spacy_model: str = "en_core_web_lg",
     chunk_words_max: int = 380,
+    tfidf_blocklist: set[str] | None = None,
 ) -> VibeResult:
-    """Full pipeline: scrub → clean → chunk → embed → mean-pool."""
+    """Full pipeline: scrub → clean (with optional TF-IDF blocklist) → chunk → embed → mean-pool."""
     joined = " ".join(r for r in reviews if r)
     if not joined.strip():
         return VibeResult(vector=[0.0] * vibe_dim, confident=False,
                           chunk_count=0, raw_token_count=0)
 
     scrubbed = scrub_entities(joined, spacy_model)
-    cleaned = clean_text(scrubbed)
+    cleaned = clean_text(scrubbed, extra_stopwords=tfidf_blocklist)
     token_count = len(cleaned.split())
 
     if token_count < MIN_TOKENS:

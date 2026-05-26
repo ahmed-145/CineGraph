@@ -206,6 +206,9 @@ export default function App() {
     removeNode,
     seedWeights,
     setSeedWeight,
+    filters,
+    setFilters,
+    runIntersect,
   } = useGraph(prefs.excluded, prefs.watchlist)
 
   const constellations = useConstellations(auth.token)
@@ -539,6 +542,14 @@ export default function App() {
             resultCount={intersectResultIds.size}
             seedWeights={seedWeights}
             onSeedWeight={setSeedWeight}
+            filters={filters}
+            onFiltersChange={(next) => {
+              setFilters(next)
+              // Re-run intersect with new filters if we have 2+ seeds
+              if (enrichedSeeds.length >= 2) {
+                setTimeout(() => runIntersect(enrichedSeeds), 0)
+              }
+            }}
           />
         </div>
       )}

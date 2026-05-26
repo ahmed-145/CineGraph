@@ -1,6 +1,9 @@
+import Filters from './Filters'
+
 export default function HUD({
   mode, seeds, onRemoveSeed, nodeCount, archivedCount, onRestoreArchived,
   resultCount = 0, seedWeights = {}, onSeedWeight,
+  filters, onFiltersChange,
 }) {
   const isIntersecting = mode === 'intersecting' && seeds.length >= 2
   const isExploring = mode === 'exploring'
@@ -77,6 +80,9 @@ export default function HUD({
           <button className="hud-archived-pill" onClick={onRestoreArchived} title="Restore last archived film">
             +{archivedCount} archived
           </button>
+        )}
+        {onFiltersChange && (
+          <Filters value={filters} onChange={onFiltersChange} />
         )}
       </div>
     </div>

@@ -9,18 +9,18 @@ async function req(path, options = {}) {
 export const api = {
   search: (q) => req(`/search?q=${encodeURIComponent(q)}&limit=8`),
 
-  expand: (tmdb_id, exclude_ids = [], offset = 0) =>
+  expand: (tmdb_id, exclude_ids = [], offset = 0, filters = {}) =>
     req('/expand', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tmdb_id, limit: 10, offset, exclude_ids }),
+      body: JSON.stringify({ tmdb_id, limit: 10, offset, exclude_ids, filters }),
     }),
 
-  intersect: (seed_ids, exclude_ids = [], weights = {}) =>
+  intersect: (seed_ids, exclude_ids = [], weights = {}, filters = {}) =>
     req('/intersect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ seed_ids, limit: 12, exclude_ids, weights }),
+      body: JSON.stringify({ seed_ids, limit: 12, exclude_ids, weights, filters }),
     }),
 
   explain: (film_id, seed_ids) =>

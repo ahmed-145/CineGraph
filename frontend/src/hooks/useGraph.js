@@ -68,11 +68,15 @@ export function useGraph(excludedSet = new Set(), watchlistSet = new Set()) {
   const [archivedNodes, setArchivedNodes] = useState([])
   // Per-seed weight 0.2..1.0 keyed by seed id. Default 1.0.
   const [seedWeights, setSeedWeights] = useState({})
+  // PRD §6.2 payload filters at query time.
+  const [filters, setFilters] = useState({})
 
   const excludedRef = useRef(excludedSet)
   excludedRef.current = excludedSet
   const seedWeightsRef = useRef(seedWeights)
   seedWeightsRef.current = seedWeights
+  const filtersRef = useRef(filters)
+  filtersRef.current = filters
 
   const nodesRef = useRef(nodes)
   nodesRef.current = nodes
@@ -186,7 +190,7 @@ export function useGraph(excludedSet = new Set(), watchlistSet = new Set()) {
           ...currentIds,
           ...[...excludedRef.current].map((x) => parseInt(x)).filter(Boolean),
         ]
-        const results = await api.expand(tmdb_id, blockedIds, offset)
+        const results = await api.expand(tmdb_id, blockedIds, offset, filtersRef.current)
         const positions = radialPositions(parent.x || 0, parent.y || 0, results.length)
         const now = Date.now()
 
@@ -249,7 +253,7 @@ export function useGraph(excludedSet = new Set(), watchlistSet = new Set()) {
       })
 
       try {
-        const results = await api.intersect(seedIds, exclude, weightArg)
+        const results = await api.intersect(seedIds, exclude, weightArg, filtersRef.current)
         const positions = clusterPositions(mid.x, mid.y, results.length)
         const now = Date.now()
 
@@ -460,5 +464,7 @@ export function useGraph(excludedSet = new Set(), watchlistSet = new Set()) {
     seedWeights,
     setSeedWeight,
     runIntersect,
+    filters,
+    setFilters,
   }
 }
