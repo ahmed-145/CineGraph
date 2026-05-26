@@ -99,9 +99,9 @@ export default function Canvas({
     const fg = graphRef.current
     if (!fg) return
     fg.d3Force('center', null)
-    fg.d3Force('charge')?.strength(-130).distanceMax(420)
-    fg.d3Force('link')?.distance(140).strength(0.22)
-    fg.d3Force('collide', forceCollide(NODE_R * 1.45).strength(0.8))
+    fg.d3Force('charge')?.strength(-180).distanceMax(450)
+    fg.d3Force('link')?.distance(140).strength(0.30)
+    fg.d3Force('collide', forceCollide(NODE_R * 1.45).strength(0.85))
   }, [graphRef])
 
   // Newly placed expand children + intersect results arrive with `_pinned: true`.
@@ -410,8 +410,9 @@ export default function Canvas({
         onEngineStop={handleEngineStop}
         cooldownTicks={Infinity}
         cooldownTime={Infinity}
-        d3AlphaDecay={0.035}
-        d3VelocityDecay={0.75}
+        d3AlphaDecay={0.018}
+        d3VelocityDecay={0.42}
+        d3AlphaMin={0.0005}
         enableNodeDrag
         enablePanInteraction
         enableZoomInteraction
