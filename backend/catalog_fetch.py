@@ -21,22 +21,40 @@ TMDB_BASE = "https://api.themoviedb.org/3"
 CATALOG_PATH = Path(__file__).parent / "films_catalog.json"
 PER_PAGE = 20
 
-# Year sweep buckets for the long-tail (PRD §6.5 — festival/awards titles)
+# Year sweep buckets for the long-tail. Narrower windows + multiple sort
+# orders bypass TMDB's per-query 500-page cap and surface different long-tail
+# slices the popularity sweep misses.
 SWEEP_YEAR_RANGES = [
-    (1900, 1959),   # classic cinema
-    (1960, 1979),   # new wave / new hollywood
-    (1980, 1994),   # 80s and early 90s
-    (1995, 2009),   # 90s + early 2000s
-    (2010, 2019),
-    (2020, 2026),
+    (1900, 1949),
+    (1950, 1969),
+    (1970, 1979),
+    (1980, 1989),
+    (1990, 1999),
+    (2000, 2009),
+    (2010, 2014),
+    (2015, 2019),
+    (2020, 2022),
+    (2023, 2026),
+]
+
+# Each sort returns a *different* ordering — popularity, revenue, release_date
+# all rank the same year-bucket differently, so each gets its own 500-page
+# allowance with non-overlapping long-tail at the bottom.
+SWEEP_SORTS = [
+    "vote_count.desc",
+    "popularity.desc",
+    "revenue.desc",
+    "primary_release_date.desc",
+    "vote_average.desc",
 ]
 
 
 def fetch_page(client: httpx.Client, page: int, vote_gte: int = 200,
-               year_lte: int | None = None, year_gte: int | None = None) -> list[dict]:
+               year_lte: int | None = None, year_gte: int | None = None,
+               sort_by: str = "vote_count.desc") -> list[dict]:
     params = {
         "api_key": settings.tmdb_api_key,
-        "sort_by": "vote_count.desc",
+        "sort_by": sort_by,
         "vote_count.gte": vote_gte,
         "page": page,
     }
@@ -46,7 +64,8 @@ def fetch_page(client: httpx.Client, page: int, vote_gte: int = 200,
         resp = client.get(f"{TMDB_BASE}/discover/movie", params=params, timeout=15)
         if resp.status_code == 200:
             return resp.json().get("results", [])
-        print(f"  Page {page}: HTTP {resp.status_code}")
+        if resp.status_code != 400:  # 400 = past page 500 cap; expected
+            print(f"  Page {page}: HTTP {resp.status_code}")
     except Exception as e:
         print(f"  Page {page}: {e}")
     return []
@@ -98,25 +117,32 @@ def main():
                 print(f"  Popularity page {page} — {len(all_films)} films")
             time.sleep(0.04)
 
-        # Phase 2 — year-bucket sweep for the long tail (festival / awards
-        # films below the popularity threshold). Iterate decades to dodge
-        # TMDB's 500-page-per-query limit.
+        # Phase 2 — year-bucket × sort-order matrix for the long tail. Each
+        # (bucket, sort) pair gets its own 500-page allowance, surfacing
+        # non-overlapping long-tail films TMDB ranks differently per sort.
         if len(all_films) < target:
-            print(f"\nSwitching to year-bucket sweep for long tail "
+            print(f"\nSwitching to year-bucket × sort-order sweep "
                   f"({target - len(all_films)} more needed)")
+            before_phase2 = len(all_films)
             for (year_gte, year_lte) in SWEEP_YEAR_RANGES:
                 if len(all_films) >= target: break
-                for page in range(1, 500):
+                for sort_by in SWEEP_SORTS:
                     if len(all_films) >= target: break
-                    results = fetch_page(client, page, vote_gte=30,
-                                         year_gte=year_gte, year_lte=year_lte)
-                    if not results: break
-                    for r in results:
-                        add(r)
-                    if page % 50 == 0:
-                        print(f"  Year {year_gte}-{year_lte} page {page} — "
-                              f"{len(all_films)} films")
-                    time.sleep(0.04)
+                    pre = len(all_films)
+                    for page in range(1, 501):
+                        if len(all_films) >= target: break
+                        results = fetch_page(client, page, vote_gte=20,
+                                             year_gte=year_gte, year_lte=year_lte,
+                                             sort_by=sort_by)
+                        if not results: break
+                        for r in results:
+                            add(r)
+                        time.sleep(0.03)
+                    added = len(all_films) - pre
+                    if added > 0:
+                        print(f"  {year_gte}-{year_lte}, sort={sort_by}: "
+                              f"+{added} (total {len(all_films)})")
+            print(f"Year-bucket sweep added {len(all_films) - before_phase2} films")
 
     CATALOG_PATH.write_text(json.dumps(all_films))
     print(f"\nSaved {len(all_films)} films → {CATALOG_PATH}")
