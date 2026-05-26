@@ -111,7 +111,7 @@ Films with thin reviews (< 80 cleaned tokens) fall back to a zero-vector for tha
 - Groq API key — [free](https://console.groq.com)
 - Supabase project — [free tier](https://supabase.com)
 
-### Backend
+### Backend — quick start (bge-base, 10k films, TMDB-only vibe)
 
 ```bash
 cd backend
@@ -121,25 +121,56 @@ pip install -r requirements.txt
 cp .env.example .env
 # Fill in TMDB_API_KEY, GROQ_API_KEY, SUPABASE_JWT_SECRET, SUPABASE_URL, SUPABASE_SERVICE_KEY
 
-# 1. Build the Phase-1 collection (text + visual, ~10k films, ~30 min)
-python ingest.py
-
-# 2. (Optional but recommended) Install spaCy for proper NER scrubbing
-pip install spacy
-python -m spacy download en_core_web_lg
-
-# 3. Build the Phase-2 vibe axis on top of Phase-1 (~3h for 10k films, resumable)
-python ingest_vibe.py
-
-# 4. Start the API
+python catalog_fetch.py                       # 10k films (~5 min)
+python ingest.py                              # text + visual axes (~30 min)
+pip install spacy && python -m spacy download en_core_web_lg   # NER scrubbing
+python ingest_vibe.py                         # adds the vibe axis (~3 h, resumable)
 uvicorn main:app --reload --port 8000
 ```
 
-On startup, the backend auto-detects which collection is available:
-- `films_v2` present → 3-axis runtime (`text + vibe + visual`)
-- only `films_phase1` → 2-axis fallback (`text + visual`)
+### Backend — full PRD-strict path (bge-large, 50k films, 4-source vibe + TF-IDF)
 
-The `/health` endpoint reports the active mode.
+PRD §6.1, §6.5, §12 call for `BAAI/bge-large-en-v1.5` (1024d × 2 → 2560d
+combined), 50,000 films at launch, and the full cascading review pipeline
+(RT Kaggle → HuggingFace → Stanford → Ebert → TMDB). All of this is
+wired — pick whichever review sources you can supply data for.
+
+```bash
+# 1. Flip the model and collection names in .env so the strict rebuild
+#    doesn't conflict with the bge-base collections you already have:
+cat >> .env <<EOF
+EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
+TEXT_DIM=1024
+VIBE_MODEL=BAAI/bge-large-en-v1.5
+VIBE_DIM=1024
+QDRANT_COLLECTION=films_phase1_large
+QDRANT_COLLECTION_V2=films_v2_large
+EOF
+
+# 2. Expand the catalog to PRD's 50k target (resumable):
+python catalog_fetch.py --target 50000
+
+# 3. Set up whichever external review sources you can supply.
+#    Each is optional; ingest_vibe.py cascades through them in PRD priority
+#    order and falls back to TMDB for the rest.
+python prep_review_sources.py stanford       # ~80 MB, free
+python prep_review_sources.py huggingface    # ~1 GB,  needs `pip install datasets`
+python prep_review_sources.py kaggle         # ~700 MB, needs `~/.kaggle/kaggle.json`
+python prep_review_sources.py ebert          # drop ebert.sqlite into review_data/
+python prep_review_sources.py mappings       # builds imdb_to_tmdb + rt_to_tmdb maps
+
+# 4. Build the new vectors. Total wall clock ≈ 8–16 hours depending on
+#    catalog size and how many review sources are active.
+python ingest.py                              # bge-large text + CLIP visual
+python ingest_vibe.py --tfidf                 # multi-source vibe + TF-IDF amplification
+
+# 5. Restart uvicorn. The backend auto-detects films_v2_large and switches
+#    to the 2560-d 3-axis runtime.
+uvicorn main:app --reload --port 8000
+```
+
+On startup, the backend logs which collection it picked. `/health` reports
+the active dim and axes — e.g. `{"axes": ["text","vibe","visual"], "embedding_dim": 2560}`.
 
 ### Frontend
 
@@ -257,10 +288,10 @@ Built with the **OLED dark + glassmorphism + neon intersection** language:
 - Supabase email + Google auth, constellation save/load/share
 
 **Next (V1 finishing):**
-- Upgrade to `bge-large-en-v1.5` for both text and vibe (1024d × 2 → 2560d combined per PRD)
-- TF-IDF amplification in the vibe pipeline
-- Add cascading review sources: RT Kaggle, HuggingFace `frankier/processed_multiscale_rt_critics`, Stanford IMDB, Roger Ebert archive
-- Scale to 50k films
+- ~~Upgrade to `bge-large-en-v1.5` for both text and vibe (1024d × 2 → 2560d combined per PRD)~~ — code shipped, flip .env to activate
+- ~~TF-IDF amplification in the vibe pipeline~~ — shipped (`ingest_vibe.py --tfidf`)
+- ~~Add cascading review sources: RT Kaggle, HuggingFace `frankier/processed_multiscale_rt_critics`, Stanford IMDB, Roger Ebert archive~~ — code shipped (`prep_review_sources.py`)
+- ~~Scale to 50k films~~ — `catalog_fetch.py --target 50000` shipped
 - Letterboxd CSV import + scraping pipeline (watched markers, rating-weighted seeds)
 - Library View (Leiden two-pass clustering, pre-computed positions, LOD rendering)
 - Taste Profile Dashboard (top clusters, blind-spot detection, Twitter-card export)
