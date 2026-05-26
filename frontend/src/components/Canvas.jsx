@@ -92,25 +92,32 @@ export default function Canvas({
     return () => el.removeEventListener('wheel', onWheel, { capture: true })
   }, [graphRef])
 
-  // Configure forces once. No center force. Edges are decorative — link
-  // strength near zero so dragging a seed doesn't yank neighbors as a block.
-  // Charge keeps gentle separation; collide stops visual overlap.
+  // Configure base forces once. We phase the link force later: high during
+  // the settle window so results bloom + spread organically between seeds,
+  // then near-zero after lock so dragging a seed doesn't yank neighbors.
   useEffect(() => {
     const fg = graphRef.current
     if (!fg) return
     fg.d3Force('center', null)
-    fg.d3Force('charge')?.strength(-60).distanceMax(380)
-    fg.d3Force('link')?.distance(140).strength(0.02)
+    fg.d3Force('charge')?.strength(-130).distanceMax(420)
+    fg.d3Force('link')?.distance(140).strength(0.22)
     fg.d3Force('collide', forceCollide(NODE_R * 1.45).strength(0.8))
   }, [graphRef])
 
-  // Newly placed expand children + intersect results arrive with `_pinned: true`
-  // so they fly to their radial / cluster slots. We unpin briefly to let the
-  // soft physics settle them, then RE-LOCK so nothing drifts later when the
-  // user drags a seed or scrolls past.
+  // Newly placed expand children + intersect results arrive with `_pinned: true`.
+  // Three-stage choreography:
+  //   t=0      placed pinned at radial / cluster slots
+  //   t=700    unpin → forces bloom them out / pull them between seeds
+  //   t=2500   lock every node + drop link strength to ~0 so dragging
+  //            a seed doesn't pull neighbours as a block.
   useEffect(() => {
     const pinned = graphData.nodes.filter((n) => n._pinned)
     if (!pinned.length) return
+
+    // Make sure link force is hot for the bloom
+    graphRef.current?.d3Force('link')?.strength(0.22)
+    graphRef.current?.d3ReheatSimulation()
+
     const unpinTimer = setTimeout(() => {
       pinned.forEach((n) => {
         delete n.fx
@@ -119,13 +126,16 @@ export default function Canvas({
       })
       graphRef.current?.d3ReheatSimulation()
     }, 700)
-    // After the settle window, lock every node at wherever it ended up.
+
     const lockTimer = setTimeout(() => {
       graphData.nodes.forEach((n) => {
         n.fx = n.x
         n.fy = n.y
       })
+      // Edges become decorative after lock — drag becomes purely mechanical.
+      graphRef.current?.d3Force('link')?.strength(0.02)
     }, 2500)
+
     return () => {
       clearTimeout(unpinTimer)
       clearTimeout(lockTimer)
