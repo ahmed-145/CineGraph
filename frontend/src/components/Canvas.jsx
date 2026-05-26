@@ -92,25 +92,26 @@ export default function Canvas({
     return () => el.removeEventListener('wheel', onWheel, { capture: true })
   }, [graphRef])
 
-  // Configure forces once. No center force → no drift. Mild repulsion + weak
-  // link tension + collide for safety. Free bodies will settle near where
-  // they're placed; pinned nodes (seeds, root films) stay put.
+  // Configure forces once. No center force. Edges are decorative — link
+  // strength near zero so dragging a seed doesn't yank neighbors as a block.
+  // Charge keeps gentle separation; collide stops visual overlap.
   useEffect(() => {
     const fg = graphRef.current
     if (!fg) return
     fg.d3Force('center', null)
-    fg.d3Force('charge')?.strength(-90).distanceMax(420)
-    fg.d3Force('link')?.distance(130).strength(0.18)
-    fg.d3Force('collide', forceCollide(NODE_R * 1.45).strength(0.75))
+    fg.d3Force('charge')?.strength(-60).distanceMax(380)
+    fg.d3Force('link')?.distance(140).strength(0.02)
+    fg.d3Force('collide', forceCollide(NODE_R * 1.45).strength(0.8))
   }, [graphRef])
 
   // Newly placed expand children + intersect results arrive with `_pinned: true`
-  // so they fly to their radial/cluster slots. After 700ms we release the pin
-  // → they float as free bodies and respond to drags / charge / link forces.
+  // so they fly to their radial / cluster slots. We unpin briefly to let the
+  // soft physics settle them, then RE-LOCK so nothing drifts later when the
+  // user drags a seed or scrolls past.
   useEffect(() => {
     const pinned = graphData.nodes.filter((n) => n._pinned)
     if (!pinned.length) return
-    const t = setTimeout(() => {
+    const unpinTimer = setTimeout(() => {
       pinned.forEach((n) => {
         delete n.fx
         delete n.fy
@@ -118,7 +119,17 @@ export default function Canvas({
       })
       graphRef.current?.d3ReheatSimulation()
     }, 700)
-    return () => clearTimeout(t)
+    // After the settle window, lock every node at wherever it ended up.
+    const lockTimer = setTimeout(() => {
+      graphData.nodes.forEach((n) => {
+        n.fx = n.x
+        n.fy = n.y
+      })
+    }, 2500)
+    return () => {
+      clearTimeout(unpinTimer)
+      clearTimeout(lockTimer)
+    }
   }, [graphData.nodes.length, graphRef, graphData.nodes])
 
   // ── single-node drag ──────────────────────────────────────────────────────
@@ -127,22 +138,11 @@ export default function Canvas({
   const handleNodeDrag = useCallback(() => {}, [])
 
   const handleNodeDragEnd = useCallback((node) => {
-    // Anchors (seeds, summoned root films) re-lock at the new drop position.
-    // Free bodies (expand children / intersect results) get released so they
-    // can keep floating and reacting to neighbors after release.
-    const isAnchor =
-      node.type === 'root' ||
-      node.is_seed ||
-      seeds.some((s) => s.id === node.id)
-    if (isAnchor) {
-      node.fx = node.x
-      node.fy = node.y
-    } else {
-      delete node.fx
-      delete node.fy
-    }
-    graphRef.current?.d3ReheatSimulation()
-  }, [seeds, graphRef])
+    // Drag is authoritative — wherever you drop a node, that's where it stays.
+    // Re-pin every dragged node so nothing rebounds via forces.
+    node.fx = node.x
+    node.fy = node.y
+  }, [])
 
   // ── node draw ──────────────────────────────────────────────────────────────
   const drawNode = useCallback(

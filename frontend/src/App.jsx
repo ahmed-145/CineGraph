@@ -225,6 +225,19 @@ export default function App() {
     setShowLanding(false)
   }, [])
 
+  // One-time toast on session restore so users notice their canvas was
+  // brought back from localStorage and know how to reset.
+  const [restoredToast, setRestoredToast] = useState(false)
+  const restoredShownRef = useRef(false)
+  useEffect(() => {
+    if (restoredShownRef.current) return
+    if (graphData.nodes.length === 0) return
+    restoredShownRef.current = true
+    setRestoredToast(true)
+    const t = setTimeout(() => setRestoredToast(false), 6000)
+    return () => clearTimeout(t)
+  }, [graphData.nodes.length])
+
   // ── auto-load last active constellation on sign-in ────────────────────────
   useEffect(() => {
     if (!auth.user || autoLoadedRef.current) return
@@ -569,6 +582,7 @@ export default function App() {
             onDelete={constellations.remove}
             onShare={handleShare}
             onFetchList={constellations.fetchList}
+            onStartFresh={!isEmpty ? clearCanvas : undefined}
             disabled={isEmpty}
           />
         </div>
@@ -696,6 +710,20 @@ export default function App() {
         >
           {prefs.excluded.size} excluded
         </button>
+      )}
+
+      {restoredToast && (
+        <div className="restored-toast">
+          <span>Brought back your last canvas.</span>
+          <button
+            className="restored-toast-btn"
+            onClick={() => { clearCanvas(); setRestoredToast(false) }}
+          >Start fresh</button>
+          <button
+            className="restored-toast-dismiss"
+            onClick={() => setRestoredToast(false)}
+          >×</button>
+        </div>
       )}
 
       {showLanding && <LandingIntro onStart={dismissLanding} />}

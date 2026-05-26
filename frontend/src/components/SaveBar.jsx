@@ -13,6 +13,7 @@ export default function SaveBar({
   onDelete,
   onShare,
   onFetchList,
+  onStartFresh,
   disabled,
 }) {
   const [open, setOpen] = useState(false)
@@ -150,8 +151,29 @@ export default function SaveBar({
               )}
 
               <div className="sb-divider" />
+              {onStartFresh && (
+                <button className="sb-item sb-item--muted" onClick={() => { onStartFresh(); setOpen(false) }}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="1 4 1 10 7 10" />
+                    <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                  </svg>
+                  Start fresh
+                </button>
+              )}
               <button className="sb-item sb-item--muted" onClick={() => { onSignOut(); setOpen(false) }}>
                 Sign out
+              </button>
+            </>
+          )}
+          {!user && onStartFresh && (
+            <>
+              <div className="sb-divider" />
+              <button className="sb-item sb-item--muted" onClick={() => { onStartFresh(); setOpen(false) }}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="1 4 1 10 7 10" />
+                  <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                </svg>
+                Start fresh
               </button>
             </>
           )}
