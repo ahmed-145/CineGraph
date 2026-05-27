@@ -76,19 +76,111 @@ def prep_stanford() -> bool:
 def prep_huggingface() -> bool:
     try:
         from datasets import load_dataset  # type: ignore
+        import pandas as pd  # type: ignore
     except ImportError:
         print("[hf] `pip install datasets pyarrow pandas` then rerun")
         return False
     target = DATA / "rt_critics_processed.parquet"
-    if target.exists():
-        print(f"[hf] already present at {target}")
-        return True
-    print("[hf] loading frankier/processed_multiscale_rt_critics from the hub...")
-    ds = load_dataset("frankier/processed_multiscale_rt_critics", split="train")
-    df = ds.to_pandas()
-    df.to_parquet(target)
-    print(f"[hf] wrote {len(df)} rows → {target}")
+    if not target.exists():
+        print("[hf] loading frankier/processed_multiscale_rt_critics from the hub...")
+        ds = load_dataset("frankier/processed_multiscale_rt_critics", split="train")
+        df = ds.to_pandas()
+        df.to_parquet(target)
+        print(f"[hf] wrote {len(df)} rows → {target}")
+    else:
+        print(f"[hf] parquet already present at {target}")
+        df = pd.read_parquet(target)
+
+    # Build rt_to_tmdb.json from the parquet so HuggingFaceRTSource (and
+    # RTKaggleSource — same schema) can actually map slug → TMDB id.
+    print(f"[hf] parquet columns: {list(df.columns)}")
+    _build_rt_to_tmdb(df)
     return True
+
+
+def _build_rt_to_tmdb(df) -> None:
+    """Build review_data/rt_to_tmdb.json from an RT-critics-style dataframe.
+
+    Strategy (best→worst):
+      1. If df has an imdb id column → use existing imdb_to_tmdb.json bridge
+         (this is the most reliable mapping).
+      2. Else if df has slug + title → normalised title match against
+         films_catalog.json.
+
+    Either way, writes to backend/review_data/rt_to_tmdb.json.
+    """
+    rt_path = DATA / "rt_to_tmdb.json"
+    rt_to_tmdb: dict[str, int] = {}
+    if rt_path.exists():
+        try:
+            existing = json.loads(rt_path.read_text())
+            if isinstance(existing, dict):
+                rt_to_tmdb.update(existing)
+        except Exception:
+            pass
+
+    slug_col = next((c for c in df.columns if "slug" in c.lower()), None)
+    if not slug_col:
+        print("[hf] no slug column found — rt_to_tmdb cannot be built")
+        return
+
+    imdb_col = next((c for c in df.columns if "imdb" in c.lower()), None)
+    title_col = next((c for c in df.columns if c.lower() in ("movie_title", "title")), None)
+
+    # Path 1: imdb → tmdb via existing mapping
+    imdb_path = DATA / "imdb_to_tmdb.json"
+    imdb_map: dict[str, int] = {}
+    if imdb_path.exists():
+        try:
+            imdb_map = json.loads(imdb_path.read_text())
+        except Exception:
+            pass
+
+    matched_via_imdb = 0
+    matched_via_title = 0
+
+    if imdb_col and imdb_map:
+        pairs = df[[slug_col, imdb_col]].drop_duplicates()
+        for slug, imdb in zip(pairs[slug_col], pairs[imdb_col]):
+            slug = str(slug)
+            imdb_str = str(imdb).strip()
+            if imdb_str in imdb_map and slug not in rt_to_tmdb:
+                rt_to_tmdb[slug] = imdb_map[imdb_str]
+                matched_via_imdb += 1
+
+    # Path 2: normalised title match against catalog
+    if title_col:
+        catalog_path = ROOT / "films_catalog.json"
+        title_to_tmdb: dict[str, list[int]] = {}
+        if catalog_path.exists():
+            try:
+                catalog = json.loads(catalog_path.read_text())
+                for f in catalog:
+                    norm = _normalise_title(f.get("title", ""))
+                    if norm:
+                        title_to_tmdb.setdefault(norm, []).append(f["tmdb_id"])
+            except Exception:
+                pass
+        if title_to_tmdb:
+            pairs = df[[slug_col, title_col]].drop_duplicates()
+            for slug, title in zip(pairs[slug_col], pairs[title_col]):
+                slug = str(slug)
+                if slug in rt_to_tmdb:
+                    continue
+                norm = _normalise_title(str(title))
+                hits = title_to_tmdb.get(norm)
+                if hits:
+                    rt_to_tmdb[slug] = hits[0]
+                    matched_via_title += 1
+
+    rt_path.write_text(json.dumps(rt_to_tmdb, indent=0))
+    print(f"[hf] rt_to_tmdb: {len(rt_to_tmdb)} total "
+          f"(imdb-matched: {matched_via_imdb}, title-matched: {matched_via_title})"
+          f" → {rt_path}")
+
+
+def _normalise_title(s: str) -> str:
+    return "".join(c.lower() for c in s if c.isalnum())
 
 
 # ──────────────────────────────────────────────────────────────────────────
