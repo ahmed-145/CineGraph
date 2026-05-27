@@ -50,3 +50,11 @@ Thumbs.db
 CineGraph_PRD.md
 CineGraph_PRD_v2.md
 Explore Canvas.html
+# Large review datasets — never commit these (downloaded via prep_review_sources.py)
+backend/review_data/stanford_imdb/
+backend/review_data/rt_critics_processed.parquet
+backend/review_data/rt_critics.csv
+backend/review_data/ebert.sqlite
+backend/review_data/imdb_to_tmdb.json
+backend/review_data/rt_to_tmdb.json
+backend/vibe_idf_blocklist.json

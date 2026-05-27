@@ -25,12 +25,18 @@ import csv
 import hashlib
 import json
 import os
+import re
 import sqlite3
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Iterable
 
 import httpx
+
+
+def _normalise_title(s: str) -> str:
+    """Match prep_review_sources._normalise_title — alphanumerics lowercase."""
+    return "".join(c.lower() for c in s if c.isalnum())
 
 
 REVIEW_DATA_DIR = Path(__file__).parent / "review_data"
@@ -140,20 +146,29 @@ class HuggingFaceRTSource(ReviewSource):
             self._index = {}
             return {}
         with open(self.map_path) as f:
-            slug_to_tmdb: dict[str, int] = json.load(f)
+            key_to_tmdb: dict[str, int] = json.load(f)
         out: dict[int, list[str]] = {}
-        # Schema: movie_slug, review_content (or similar — names vary by export)
+        # Schema variants:
+        #   - older RT Kaggle: movie_slug + review_content
+        #   - HF processed_multiscale_rt_critics: movie_title + review_content
         slug_col = next((c for c in df.columns if "slug" in c.lower()), None)
+        title_col = next((c for c in df.columns if c.lower() in ("movie_title", "title")), None)
         text_col = next((c for c in df.columns if "review" in c.lower() and "content" in c.lower()),
                         None) or next((c for c in df.columns if "text" in c.lower()), None)
-        if not slug_col or not text_col:
+        if not text_col or (not slug_col and not title_col):
             self._index = {}
             return {}
-        for slug, txt in zip(df[slug_col], df[text_col]):
-            tid = slug_to_tmdb.get(str(slug))
-            if not tid or not txt:
+        # When the dataset has no slug we use the normalised title as the key,
+        # which is what prep_review_sources.py builds into rt_to_tmdb.json.
+        key_col = slug_col or title_col
+        normalise = (slug_col is None)
+        for raw_key, txt in zip(df[key_col], df[text_col]):
+            if not txt:
                 continue
-            out.setdefault(int(tid), []).append(str(txt))
+            key = _normalise_title(str(raw_key)) if normalise else str(raw_key)
+            tid = key_to_tmdb.get(key)
+            if tid:
+                out.setdefault(int(tid), []).append(str(txt))
         self._index = out
         return out
 

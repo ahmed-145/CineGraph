@@ -119,13 +119,17 @@ def _build_rt_to_tmdb(df) -> None:
         except Exception:
             pass
 
+    # Some RT exports have a slug column, some (like HF's processed parquet)
+    # only have `movie_title`. We support both; rt_to_tmdb.json keys are
+    # whatever the source provides, normalised.
     slug_col = next((c for c in df.columns if "slug" in c.lower()), None)
-    if not slug_col:
-        print("[hf] no slug column found — rt_to_tmdb cannot be built")
-        return
-
-    imdb_col = next((c for c in df.columns if "imdb" in c.lower()), None)
     title_col = next((c for c in df.columns if c.lower() in ("movie_title", "title")), None)
+    imdb_col = next((c for c in df.columns if "imdb" in c.lower()), None)
+    if not slug_col and not title_col:
+        print("[hf] no slug or title column — rt_to_tmdb cannot be built")
+        return
+    join_col = slug_col or title_col
+    print(f"[hf] joining on column: {join_col}")
 
     # Path 1: imdb → tmdb via existing mapping
     imdb_path = DATA / "imdb_to_tmdb.json"
@@ -139,16 +143,22 @@ def _build_rt_to_tmdb(df) -> None:
     matched_via_imdb = 0
     matched_via_title = 0
 
+    use_title_as_key = (slug_col is None)
+
+    def _make_key(raw) -> str:
+        return _normalise_title(str(raw)) if use_title_as_key else str(raw)
+
     if imdb_col and imdb_map:
-        pairs = df[[slug_col, imdb_col]].drop_duplicates()
-        for slug, imdb in zip(pairs[slug_col], pairs[imdb_col]):
-            slug = str(slug)
+        pairs = df.loc[:, [join_col, imdb_col]].drop_duplicates()
+        for k, imdb in zip(pairs.iloc[:, 0], pairs.iloc[:, 1]):
+            key = _make_key(k)
             imdb_str = str(imdb).strip()
-            if imdb_str in imdb_map and slug not in rt_to_tmdb:
-                rt_to_tmdb[slug] = imdb_map[imdb_str]
+            if imdb_str in imdb_map and key not in rt_to_tmdb:
+                rt_to_tmdb[key] = imdb_map[imdb_str]
                 matched_via_imdb += 1
 
-    # Path 2: normalised title match against catalog
+    # Path 2: normalised title match against catalog. When the source has no
+    # explicit slug column we treat the (normalised) title as the key.
     if title_col:
         catalog_path = ROOT / "films_catalog.json"
         title_to_tmdb: dict[str, list[int]] = {}
@@ -161,16 +171,16 @@ def _build_rt_to_tmdb(df) -> None:
                         title_to_tmdb.setdefault(norm, []).append(f["tmdb_id"])
             except Exception:
                 pass
+        print(f"[hf] catalog title bridge has {len(title_to_tmdb)} unique titles")
         if title_to_tmdb:
-            pairs = df[[slug_col, title_col]].drop_duplicates()
-            for slug, title in zip(pairs[slug_col], pairs[title_col]):
-                slug = str(slug)
-                if slug in rt_to_tmdb:
-                    continue
+            unique_titles = df[title_col].drop_duplicates()
+            for title in unique_titles:
                 norm = _normalise_title(str(title))
+                if not norm or norm in rt_to_tmdb:
+                    continue
                 hits = title_to_tmdb.get(norm)
                 if hits:
-                    rt_to_tmdb[slug] = hits[0]
+                    rt_to_tmdb[norm] = hits[0]
                     matched_via_title += 1
 
     rt_path.write_text(json.dumps(rt_to_tmdb, indent=0))
