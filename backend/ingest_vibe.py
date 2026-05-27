@@ -24,6 +24,7 @@ Performance notes:
 
 from __future__ import annotations
 import argparse
+import concurrent.futures
 import json
 import time
 from pathlib import Path
@@ -41,7 +42,9 @@ import vibe as vibe_mod
 import review_sources as rs
 
 
-BATCH_LOG = 25  # log every N films
+BATCH_LOG = 100              # log every N films
+REVIEW_FETCH_WORKERS = 16    # parallel TMDB review fetches per batch
+BATCH_SIZE = 64              # films per batch — fetch reviews in parallel, embed sequentially
 IDF_PATH = Path(__file__).parent / "vibe_idf_blocklist.json"
 
 
@@ -209,60 +212,73 @@ def main():
     skipped = 0
     confident = 0
     started = time.time()
-    buffer: list[PointStruct] = []
-    BUFFER_FLUSH = 32
 
+    review_pool = concurrent.futures.ThreadPoolExecutor(max_workers=REVIEW_FETCH_WORKERS)
+
+    def _fetch(tid: int) -> list[str]:
+        try:
+            return rs.cascading_reviews(tid, sources)
+        except Exception:
+            return []
+
+    def _flush_batch(batch: list[tuple[int, dict, list[float]]]):
+        nonlocal processed, confident, skipped
+        if not batch:
+            return
+        # Phase 1: parallel review fetch (I/O-bound — TMDB API)
+        future_to_idx = {review_pool.submit(_fetch, tid): i for i, (tid, _, _) in enumerate(batch)}
+        reviews_by_idx: dict[int, list[str]] = {}
+        for fut in concurrent.futures.as_completed(future_to_idx):
+            reviews_by_idx[future_to_idx[fut]] = fut.result()
+
+        # Phase 2: sequential embed + payload assembly (CPU-bound)
+        points: list[PointStruct] = []
+        for i, (tid, payload, vec) in enumerate(batch):
+            reviews = reviews_by_idx.get(i, [])
+            result = vibe_mod.build_vibe_vector(
+                reviews,
+                embedder=vibe_embedder,
+                vibe_dim=settings.vibe_dim,
+                spacy_model=settings.spacy_model,
+                chunk_words_max=settings.vibe_chunk_words,
+                tfidf_blocklist=blocklist or None,
+            )
+            text_part, visual_part = split_v1_vector(vec)
+            combined = text_part + result.vector + visual_part
+            new_payload = {
+                **payload,
+                "vibe_confident": result.confident,
+                "vibe_chunks": result.chunk_count,
+                "vibe_tokens": result.raw_token_count,
+            }
+            points.append(PointStruct(id=tid, vector=combined, payload=new_payload))
+            if result.confident:
+                confident += 1
+            else:
+                skipped += 1
+            processed += 1
+
+        # Phase 3: one upsert per batch
+        client.upsert(collection_name=settings.qdrant_collection_v2, points=points)
+
+        if processed and (processed // BATCH_LOG) != ((processed - len(batch)) // BATCH_LOG):
+            rate = processed / max(time.time() - started, 1e-6)
+            eta_min = max(0, (total_count - len(done) - processed)) / max(rate, 1e-6) / 60
+            print(f"  {processed} done | {confident} confident | {skipped} sparse | "
+                  f"{rate:.2f} films/s | ETA {eta_min:.1f} min")
+
+    batch: list[tuple[int, dict, list[float]]] = []
     for tid, payload, vec in scroll_v1_points(client):
         if tid in done:
             continue
+        batch.append((tid, payload, vec))
+        if len(batch) >= BATCH_SIZE:
+            _flush_batch(batch)
+            batch = []
+    if batch:
+        _flush_batch(batch)
 
-        try:
-            reviews = rs.cascading_reviews(tid, sources)
-        except Exception as e:
-            print(f"  [{tid}] review fetch failed: {e}")
-            reviews = []
-
-        result = vibe_mod.build_vibe_vector(
-            reviews,
-            embedder=vibe_embedder,
-            vibe_dim=settings.vibe_dim,
-            spacy_model=settings.spacy_model,
-            chunk_words_max=settings.vibe_chunk_words,
-            tfidf_blocklist=blocklist or None,
-        )
-
-        text_part, visual_part = split_v1_vector(vec)
-        combined = text_part + result.vector + visual_part
-        assert len(combined) == settings.embedding_dim_v2, \
-            f"Bad combined length {len(combined)} != {settings.embedding_dim_v2}"
-
-        new_payload = {
-            **payload,
-            "vibe_confident": result.confident,
-            "vibe_chunks": result.chunk_count,
-            "vibe_tokens": result.raw_token_count,
-        }
-        buffer.append(PointStruct(id=tid, vector=combined, payload=new_payload))
-
-        if result.confident:
-            confident += 1
-        else:
-            skipped += 1
-        processed += 1
-
-        if len(buffer) >= BUFFER_FLUSH:
-            client.upsert(collection_name=settings.qdrant_collection_v2, points=buffer)
-            buffer.clear()
-
-        if processed % BATCH_LOG == 0:
-            rate = processed / max(time.time() - started, 1e-6)
-            print(f"  {processed} done | {confident} confident | {skipped} sparse | {rate:.2f} films/s")
-
-        # TMDB rate-limit hygiene
-        time.sleep(0.04)
-
-    if buffer:
-        client.upsert(collection_name=settings.qdrant_collection_v2, points=buffer)
+    review_pool.shutdown(wait=False)
 
     elapsed = time.time() - started
     final = client.count(settings.qdrant_collection_v2).count
