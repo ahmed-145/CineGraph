@@ -22,6 +22,7 @@ mapping from IMDB id / RT slug). Loaded lazily on first query.
 
 from __future__ import annotations
 import csv
+import hashlib
 import json
 import os
 import sqlite3
@@ -317,13 +318,25 @@ def default_sources(tmdb_api_key: str) -> list[ReviewSource]:
     ]
 
 
+def _content_fingerprint(text: str) -> str:
+    """Stable hash over the first 200 chars of normalised text. Used to
+    dedup reviews that appear in multiple sources (e.g. RT Kaggle and the
+    HuggingFace `frankier/processed_multiscale_rt_critics` dataset are both
+    RT-sourced and share the same critic blurbs)."""
+    normalised = " ".join(text.lower().split())[:200]
+    return hashlib.md5(normalised.encode("utf-8")).hexdigest()
+
+
 def cascading_reviews(
     tmdb_id: int,
     sources: Iterable[ReviewSource],
     max_total: int = 60,
 ) -> list[str]:
-    """Query each source in order, stop once we have enough text to embed."""
+    """Query each source in PRD priority order. Dedups reviews by content
+    fingerprint so RT-sourced overlap between Kaggle and HuggingFace doesn't
+    double-weight a critic's voice in the mean-pool."""
     out: list[str] = []
+    seen: set[str] = set()
     for src in sources:
         if not src.is_available():
             continue
@@ -331,10 +344,17 @@ def cascading_reviews(
             chunk = src.reviews_for(tmdb_id)
         except Exception:
             continue
-        out.extend(chunk)
-        if len(out) >= max_total:
-            return out[:max_total]
-    return out[:max_total]
+        for review in chunk:
+            if not review or len(review.strip()) < 20:
+                continue
+            fp = _content_fingerprint(review)
+            if fp in seen:
+                continue
+            seen.add(fp)
+            out.append(review)
+            if len(out) >= max_total:
+                return out
+    return out
 
 
 def availability_report(sources: Iterable[ReviewSource]) -> dict:
