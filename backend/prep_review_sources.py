@@ -173,12 +173,12 @@ def prep_mappings() -> bool:
       - imdb_to_tmdb.json (used by Stanford + Ebert sources)
       - rt_to_tmdb.json   (used by Kaggle + HuggingFace sources)
 
-    Approach: scroll the existing Qdrant collection to find tmdb_ids we
-    already know about, then call TMDB external_ids for each to get imdb_id.
-    RT slug mapping is best-effort via TMDB's `find/{imdb_id}` reverse lookup
-    or by matching the slug against titles.
+    Parallel TMDB external_ids fetch (32-way) — for a 50k catalog this
+    completes in ~3-5 min instead of ~35. Resumable: saves every 500 films.
     """
+    import concurrent.futures
     from qdrant_client import QdrantClient
+
     client = QdrantClient(url=settings.qdrant_url)
     existing_collections = {c.name for c in client.get_collections().collections}
     coll = (settings.qdrant_collection_v2 if settings.qdrant_collection_v2 in existing_collections
@@ -189,6 +189,7 @@ def prep_mappings() -> bool:
     if imdb_path.exists():
         imdb_map = json.loads(imdb_path.read_text())
         print(f"[mappings] resuming from {len(imdb_map)} existing imdb→tmdb")
+    already_mapped_tmdb = set(imdb_map.values())
 
     print(f"[mappings] scrolling {coll} to enumerate films...")
     offset = None
@@ -200,37 +201,46 @@ def prep_mappings() -> bool:
         )
         for p in result:
             tid = p.payload.get("tmdb_id")
-            if tid is not None:
+            if tid is not None and tid not in already_mapped_tmdb:
                 tmdb_ids.append(tid)
         if offset is None:
             break
-    print(f"[mappings] {len(tmdb_ids)} films total")
+    print(f"[mappings] {len(tmdb_ids)} unmapped films")
 
-    # Pull IMDB id per TMDB id — TMDB rate limit is generous; we still pace.
+    if not tmdb_ids:
+        print("[mappings] nothing to do")
+        # Still create rt_to_tmdb.json stub
+        rt_path = DATA / "rt_to_tmdb.json"
+        if not rt_path.exists():
+            rt_path.write_text("{}")
+        return True
+
     started = time.time()
-    fetched = 0
-    for tid in tmdb_ids:
-        if str(tid) in imdb_map.values():
-            continue  # already mapped
-        existing_imdb = next((k for k, v in imdb_map.items() if v == tid), None)
-        if existing_imdb:
-            continue
-        imdb = _imdb_id_from_tmdb_payload(tid)
-        if imdb:
-            imdb_map[imdb] = tid
-        fetched += 1
-        if fetched % 100 == 0:
-            rate = fetched / max(time.time() - started, 1e-6)
-            print(f"[mappings] {fetched} / {len(tmdb_ids)} ({rate:.1f}/s)")
+    WORKERS = 32
+    BATCH = 500   # save every 500 films
+
+    def _lookup(tid: int) -> tuple[int, str | None]:
+        return tid, _imdb_id_from_tmdb_payload(tid)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        fetched = 0
+        for i in range(0, len(tmdb_ids), BATCH):
+            chunk = tmdb_ids[i:i + BATCH]
+            futures = [pool.submit(_lookup, tid) for tid in chunk]
+            for fut in concurrent.futures.as_completed(futures):
+                tid, imdb = fut.result()
+                if imdb:
+                    imdb_map[imdb] = tid
+                fetched += 1
             imdb_path.write_text(json.dumps(imdb_map, indent=0))
-        time.sleep(0.04)
+            rate = fetched / max(time.time() - started, 1e-6)
+            eta_min = (len(tmdb_ids) - fetched) / max(rate, 1e-6) / 60
+            print(f"[mappings] {fetched} / {len(tmdb_ids)}  |  "
+                  f"{rate:.1f}/s  |  ETA {eta_min:.1f} min")
 
     imdb_path.write_text(json.dumps(imdb_map, indent=0))
     print(f"[mappings] wrote {len(imdb_map)} imdb→tmdb → {imdb_path}")
 
-    # RT slug mapping uses the title-year heuristic on top of imdb→tmdb.
-    # We rely on the Kaggle CSV having both slug + title (we can populate
-    # this lazily on first ingest). Stub a tiny file here.
     rt_path = DATA / "rt_to_tmdb.json"
     if not rt_path.exists():
         rt_path.write_text("{}")
