@@ -131,6 +131,7 @@ export function useGraph(excludedSet = new Set(), watchlistSet = new Set(), watc
         !seedIds.has(n.id) &&
         n.type !== 'intersect_result' &&
         !watchlistSet.has(n.id) &&
+        !watchedRatingsRef.current.has(n.id) &&   // PRD §5.1: never fade watched-marked films
         (now - (lastTouchedRef.current.get(n.id) || 0)) > TOUCH_GRACE_MS
     )
     if (!eligible.length) return
