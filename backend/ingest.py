@@ -32,7 +32,7 @@ POSTER_WORKERS = 12
 
 
 def get_qdrant() -> QdrantClient:
-    return QdrantClient(url=settings.qdrant_url)
+    return QdrantClient(url=settings.qdrant_url, timeout=120)
 
 
 def ensure_collection(client: QdrantClient):

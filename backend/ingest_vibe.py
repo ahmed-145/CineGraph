@@ -49,7 +49,7 @@ IDF_PATH = Path(__file__).parent / "vibe_idf_blocklist.json"
 
 
 def get_qdrant() -> QdrantClient:
-    return QdrantClient(url=settings.qdrant_url)
+    return QdrantClient(url=settings.qdrant_url, timeout=120)
 
 
 def ensure_v2_collection(client: QdrantClient):
