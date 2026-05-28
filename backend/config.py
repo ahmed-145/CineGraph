@@ -52,6 +52,7 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+        extra = "ignore"  # allow unrelated env vars (KAGGLE_*, etc.) to pass through
 
 
 settings = Settings()

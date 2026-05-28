@@ -17,6 +17,7 @@ Outputs land in backend/review_data/.
 
 from __future__ import annotations
 import argparse
+import csv
 import io
 import json
 import os
@@ -198,28 +199,82 @@ def _normalise_title(s: str) -> str:
 # ──────────────────────────────────────────────────────────────────────────
 def prep_kaggle() -> bool:
     target = DATA / "rt_critics.csv"
-    if target.exists():
-        print(f"[kaggle] already present at {target}")
-        return True
-    try:
-        import kaggle  # noqa: F401
-    except (ImportError, OSError):
-        print("[kaggle] `pip install kaggle`, then put your kaggle.json at "
-              "~/.kaggle/kaggle.json (chmod 600). Then rerun.")
+    movies_csv = DATA / "rotten_tomatoes_movies.csv"
+
+    if not target.exists():
+        try:
+            from kaggle.api.kaggle_api_extended import KaggleApi  # type: ignore
+        except (ImportError, OSError) as e:
+            print(f"[kaggle] kaggle package unavailable ({e}). "
+                  f"Set KAGGLE_USERNAME + KAGGLE_KEY in .env and `pip install kaggle`.")
+            return False
+        try:
+            api = KaggleApi()
+            api.authenticate()  # reads KAGGLE_USERNAME / KAGGLE_KEY from env
+            print("[kaggle] downloading rotten-tomatoes-movies-and-critic-reviews-dataset (~700MB)...")
+            api.dataset_download_files(
+                "stefanoleone992/rotten-tomatoes-movies-and-critic-reviews-dataset",
+                path=str(DATA), unzip=True,
+            )
+        except Exception as e:
+            print(f"[kaggle] download failed: {e}")
+            return False
+        # Locate + rename the reviews CSV
+        for name in ("rotten_tomatoes_critic_reviews.csv", "rotten_tomatoes_reviews.csv"):
+            cand = DATA / name
+            if cand.exists():
+                cand.rename(target)
+                print(f"[kaggle] reviews → {target}")
+                break
+        else:
+            print("[kaggle] couldn't find reviews CSV after download")
+            return False
+    else:
+        print(f"[kaggle] reviews CSV already present at {target}")
+
+    # Build the slug → TMDB map from the movies CSV (title + year matching).
+    if movies_csv.exists():
+        _build_kaggle_slug_map(movies_csv)
+    else:
+        print(f"[kaggle] {movies_csv.name} not found — RTKaggleSource needs the slug map")
         return False
-    print("[kaggle] downloading rotten-tomatoes-movies-and-critic-reviews-dataset...")
-    os.system("kaggle datasets download "
-              "stefanoleone992/rotten-tomatoes-movies-and-critic-reviews-dataset "
-              f"-p {DATA} --unzip")
-    # Kaggle drops two CSVs — we want the reviews file.
-    for name in ("rotten_tomatoes_critic_reviews.csv", "rotten_tomatoes_reviews.csv"):
-        candidate = DATA / name
-        if candidate.exists():
-            candidate.rename(target)
-            print(f"[kaggle] renamed → {target}")
-            return True
-    print("[kaggle] couldn't find reviews CSV after download")
-    return False
+    return True
+
+
+def _build_kaggle_slug_map(movies_csv: Path) -> None:
+    """Map each rotten_tomatoes_link slug → TMDB id via title + year match
+    against films_catalog.json. Writes rt_kaggle_map.json."""
+    catalog_path = ROOT / "films_catalog.json"
+    if not catalog_path.exists():
+        print("[kaggle] films_catalog.json missing — run catalog_fetch.py first")
+        return
+    catalog = json.loads(catalog_path.read_text())
+    # Title → list[(tmdb_id, year?)]. Catalog has no year, so title-only here;
+    # we disambiguate using the Qdrant payload year only if needed. For RT we
+    # accept first title match (RT titles are English, usually unambiguous).
+    title_to_tmdb: dict[str, list[int]] = {}
+    for f in catalog:
+        norm = _normalise_title(f.get("title", ""))
+        if norm:
+            title_to_tmdb.setdefault(norm, []).append(f["tmdb_id"])
+
+    slug_map: dict[str, int] = {}
+    matched = 0
+    with open(movies_csv, newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            slug = (row.get("rotten_tomatoes_link") or "").strip()
+            title = row.get("movie_title") or ""
+            if not slug or not title:
+                continue
+            norm = _normalise_title(title)
+            hits = title_to_tmdb.get(norm)
+            if hits:
+                slug_map[slug] = hits[0]
+                matched += 1
+    out = DATA / "rt_kaggle_map.json"
+    out.write_text(json.dumps(slug_map, indent=0))
+    print(f"[kaggle] rt_kaggle_map: {matched} slug→tmdb → {out}")
 
 
 # ──────────────────────────────────────────────────────────────────────────

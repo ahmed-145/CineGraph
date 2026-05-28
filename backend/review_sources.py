@@ -69,7 +69,9 @@ class RTKaggleSource(ReviewSource):
 
     def __init__(self, csv_path: Path | None = None, map_path: Path | None = None):
         self.csv_path = csv_path or (REVIEW_DATA_DIR / "rt_critics.csv")
-        self.map_path = map_path or (REVIEW_DATA_DIR / "rt_to_tmdb.json")
+        # Kaggle uses its own slug→tmdb map (keyed by rotten_tomatoes_link),
+        # distinct from the HF title-keyed rt_to_tmdb.json.
+        self.map_path = map_path or (REVIEW_DATA_DIR / "rt_kaggle_map.json")
         self._index: dict[int, list[str]] | None = None
 
     def is_available(self) -> bool:
@@ -84,7 +86,7 @@ class RTKaggleSource(ReviewSource):
         with open(self.csv_path, newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                slug = row.get("rotten_tomatoes_link", "").strip("/")
+                slug = (row.get("rotten_tomatoes_link") or "").strip()
                 tid = slug_to_tmdb.get(slug)
                 if not tid:
                     continue
