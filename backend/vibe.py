@@ -242,7 +242,12 @@ def build_vibe_vector(
         return VibeResult(vector=[0.0] * vibe_dim, confident=False,
                           chunk_count=0, raw_token_count=token_count)
 
-    chunk_vecs = list(embedder.embed(chunks, batch_size=8))
+    # Cap chunks per film: 12 × 380 words ≈ 4,500 words is plenty for a stable
+    # vibe signal, and bounds GPU memory (bge-large on a 6GB card OOMs on
+    # review-heavy films otherwise). batch_size=4 keeps per-call allocations small.
+    if len(chunks) > 12:
+        chunks = chunks[:12]
+    chunk_vecs = list(embedder.embed(chunks, batch_size=4))
     pooled = np.mean(np.stack([np.asarray(v) for v in chunk_vecs]), axis=0)
     # L2-normalize so cosine similarity behaves correctly when mixed with the
     # other axes inside the combined vector.
