@@ -208,6 +208,22 @@ create policy "owner access" on constellations
 
 create policy "share read" on constellations
   for select using (share_token is not null);
+
+-- Letterboxd import (Phase D)
+create table letterboxd_films (
+  user_id      uuid references auth.users not null,
+  tmdb_id      int not null,
+  rating       real,
+  watched_date text,
+  rewatch      boolean default false,
+  created_at   timestamptz default now(),
+  primary key (user_id, tmdb_id)
+);
+
+alter table letterboxd_films enable row level security;
+
+create policy "owner films" on letterboxd_films
+  for all using (auth.uid() = user_id);
 ```
 
 ---
@@ -292,7 +308,7 @@ Built with the **OLED dark + glassmorphism + neon intersection** language:
 - ~~TF-IDF amplification in the vibe pipeline~~ — shipped (`ingest_vibe.py --tfidf`)
 - ~~Add cascading review sources: RT Kaggle, HuggingFace `frankier/processed_multiscale_rt_critics`, Stanford IMDB, Roger Ebert archive~~ — code shipped (`prep_review_sources.py`)
 - ~~Scale to 50k films~~ — `catalog_fetch.py --target 50000` shipped
-- Letterboxd CSV import + scraping pipeline (watched markers, rating-weighted seeds)
+- ~~Letterboxd CSV import + scraping pipeline (watched markers, rating-weighted seeds)~~ — shipped (Phase D)
 - Library View (Leiden two-pass clustering, pre-computed positions, LOD rendering)
 - Taste Profile Dashboard (top clusters, blind-spot detection, Twitter-card export)
 

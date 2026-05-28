@@ -9,6 +9,8 @@ import { useGraph } from './hooks/useGraph'
 import { useAuth } from './hooks/useAuth'
 import { useConstellations, serializeCanvas } from './hooks/useConstellations'
 import { usePreferences } from './hooks/usePreferences'
+import { useLetterboxd } from './hooks/useLetterboxd'
+import LetterboxdModal from './components/LetterboxdModal'
 
 function moodHslFor(id) {
   const hue = (parseInt(id, 10) * 137) % 360
@@ -185,6 +187,7 @@ export default function App() {
   const graphRef = useRef()
   const auth = useAuth()
   const prefs = usePreferences()
+  const letterboxd = useLetterboxd(auth.token)
   const {
     graphData,
     seeds,
@@ -209,7 +212,9 @@ export default function App() {
     filters,
     setFilters,
     runIntersect,
-  } = useGraph(prefs.excluded, prefs.watchlist)
+  } = useGraph(prefs.excluded, prefs.watchlist, letterboxd.watched)
+
+  const [showLetterboxd, setShowLetterboxd] = useState(false)
 
   const constellations = useConstellations(auth.token)
 
@@ -517,6 +522,7 @@ export default function App() {
           onNodeRightClick={handleNodeRightClick}
           graphRef={graphRef}
           watchlist={prefs.watchlist}
+          watched={letterboxd.watched}
         />
       </div>
 
@@ -583,6 +589,8 @@ export default function App() {
             onShare={handleShare}
             onFetchList={constellations.fetchList}
             onStartFresh={!isEmpty ? clearCanvas : undefined}
+            onPersonalize={() => setShowLetterboxd(true)}
+            watchedCount={letterboxd.watched.size}
             disabled={isEmpty}
           />
         </div>
@@ -619,6 +627,7 @@ export default function App() {
             isExcluded={prefs.excluded.has(String(selectedNode.id))}
             onToggleWatchlist={handleToggleWatchlist}
             onExcludeForever={handleExcludeForever}
+            letterboxdEntry={letterboxd.watched.get(String(selectedNode.id))}
             graphNodes={graphData.nodes}
             onSelectFilm={(film) => {
               const existing = graphData.nodes.find((n) => String(n.id) === String(film.tmdb_id))
@@ -727,6 +736,17 @@ export default function App() {
       )}
 
       {showLanding && <LandingIntro onStart={dismissLanding} />}
+
+      {showLetterboxd && (
+        <LetterboxdModal
+          onClose={() => setShowLetterboxd(false)}
+          onImport={letterboxd.startImport}
+          importing={letterboxd.importing}
+          progress={letterboxd.progress}
+          watchedCount={letterboxd.watched.size}
+          onClear={letterboxd.clearLibrary}
+        />
+      )}
 
       {showAuth && <AuthModal auth={auth} onClose={() => setShowAuth(false)} />}
 

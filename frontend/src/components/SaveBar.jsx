@@ -14,6 +14,8 @@ export default function SaveBar({
   onShare,
   onFetchList,
   onStartFresh,
+  onPersonalize,
+  watchedCount = 0,
   disabled,
 }) {
   const [open, setOpen] = useState(false)
@@ -124,6 +126,15 @@ export default function SaveBar({
                 </svg>
                 {copied ? 'Link copied' : sharing ? 'Sharing…' : 'Share link'}
               </button>
+
+              {onPersonalize && (
+                <button className="sb-item" onClick={() => { onPersonalize(); setOpen(false) }}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 2l2.4 7.4H22l-6 4.6 2.3 7.4-6.3-4.6L5.7 21l2.3-7.4-6-4.6h7.6z" />
+                  </svg>
+                  {watchedCount > 0 ? `Letterboxd (${watchedCount})` : 'Personalize with Letterboxd'}
+                </button>
+              )}
 
               {constellations.length > 0 && (
                 <>

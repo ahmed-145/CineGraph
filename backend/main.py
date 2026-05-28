@@ -25,6 +25,7 @@ from ingest import build_film_text, build_payload, fetch_tmdb_metadata, download
 import db
 import vibe as vibe_mod
 from constellations import router as constellations_router
+from letterboxd_routes import router as letterboxd_router
 
 
 # Active collection — picked at startup. v2 (3-axis) preferred when present;
@@ -123,6 +124,7 @@ async def _build_film_index():
 app = FastAPI(title="CineGraph", lifespan=lifespan)
 
 app.include_router(constellations_router)
+app.include_router(letterboxd_router)
 
 app.add_middleware(
     CORSMiddleware,

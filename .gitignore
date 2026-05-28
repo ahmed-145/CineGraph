@@ -58,3 +58,4 @@ backend/review_data/ebert.sqlite
 backend/review_data/imdb_to_tmdb.json
 backend/review_data/rt_to_tmdb.json
 backend/vibe_idf_blocklist.json
+backend/*.deb

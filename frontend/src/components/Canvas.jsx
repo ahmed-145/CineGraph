@@ -65,6 +65,7 @@ export default function Canvas({
   onNodeRightClick,
   graphRef,
   watchlist = new Set(),
+  watched = new Map(),
 }) {
   const containerRef = useRef()
   const dragGroupRef = useRef(null)
@@ -294,6 +295,31 @@ export default function Canvas({
       ctx.fillStyle = vign
       ctx.fill()
 
+      // ── Watched indicator (green check ring, bottom-right) ───────────────
+      if (watched.has(node.id)) {
+        const cx2 = x + R * 0.62
+        const cy2 = y + R * 0.62
+        ctx.save()
+        ctx.beginPath()
+        ctx.arc(cx2, cy2, 5.5, 0, 2 * Math.PI)
+        ctx.fillStyle = '#0a0a0a'
+        ctx.fill()
+        ctx.strokeStyle = '#7CFFB2'
+        ctx.lineWidth = 1.2
+        ctx.stroke()
+        // checkmark
+        ctx.beginPath()
+        ctx.moveTo(cx2 - 2.4, cy2 + 0.2)
+        ctx.lineTo(cx2 - 0.6, cy2 + 2)
+        ctx.lineTo(cx2 + 2.6, cy2 - 2.2)
+        ctx.strokeStyle = '#7CFFB2'
+        ctx.lineWidth = 1.4
+        ctx.lineCap = 'round'
+        ctx.lineJoin = 'round'
+        ctx.stroke()
+        ctx.restore()
+      }
+
       // ── Watchlist indicator (small gold star top-right) ──────────────────
       if (watchlist.has(node.id)) {
         const sx = x + R * 0.65
@@ -338,7 +364,7 @@ export default function Canvas({
 
       ctx.restore()
     },
-    [seeds, intersectResultIds, selectedNode, mode, highlightedGenre, watchlist]
+    [seeds, intersectResultIds, selectedNode, mode, highlightedGenre, watchlist, watched]
   )
 
   // Keep RAF alive after sim cools so halos + edge dash animation keep ticking.

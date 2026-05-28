@@ -42,7 +42,7 @@ function hydrateFromStorage() {
   }
 }
 
-export function useGraph(excludedSet = new Set(), watchlistSet = new Set()) {
+export function useGraph(excludedSet = new Set(), watchlistSet = new Set(), watchedRatings = new Map()) {
   const hydrated = typeof window !== 'undefined' ? hydrateFromStorage() : null
 
   const [nodes, setNodes] = useState(() =>
@@ -75,6 +75,8 @@ export function useGraph(excludedSet = new Set(), watchlistSet = new Set()) {
   excludedRef.current = excludedSet
   const seedWeightsRef = useRef(seedWeights)
   seedWeightsRef.current = seedWeights
+  const watchedRatingsRef = useRef(watchedRatings)
+  watchedRatingsRef.current = watchedRatings
   const filtersRef = useRef(filters)
   filtersRef.current = filters
 
@@ -245,11 +247,18 @@ export function useGraph(excludedSet = new Set(), watchlistSet = new Set()) {
       const baseExclude = currentIds.filter((id) => !seedIds.includes(id))
       const userExcludes = [...excludedRef.current].map((x) => parseInt(x)).filter(Boolean)
       const exclude = [...new Set([...baseExclude, ...userExcludes])]
+      // Weight priority: explicit slider value → Letterboxd rating/5 → 1.0
       const weights = seedWeightsRef.current
+      const ratings = watchedRatingsRef.current
       const weightArg = {}
       currentSeeds.forEach((s) => {
-        const w = weights[s.id]
-        if (typeof w === 'number') weightArg[parseInt(s.id)] = w
+        const explicit = weights[s.id]
+        if (typeof explicit === 'number') {
+          weightArg[parseInt(s.id)] = explicit
+        } else {
+          const entry = ratings.get(String(s.id))
+          if (entry?.rating) weightArg[parseInt(s.id)] = entry.rating / 5
+        }
       })
 
       try {

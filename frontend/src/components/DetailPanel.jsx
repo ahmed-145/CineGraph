@@ -20,6 +20,7 @@ export default function DetailPanel({
   onExcludeForever,
   graphNodes = [],
   onSelectFilm,
+  letterboxdEntry,
 }) {
   const [explanation, setExplanation] = useState(null)
   const [loadingExplain, setLoadingExplain] = useState(false)
@@ -117,6 +118,12 @@ export default function DetailPanel({
             {node.vote_average != null && <span>★ {node.vote_average.toFixed(1)}</span>}
           </div>
           {node.director && <div className="detail-director">dir. {node.director}</div>}
+          {letterboxdEntry?.rating != null && (
+            <div className="detail-your-rating">
+              You rated {'★'.repeat(Math.floor(letterboxdEntry.rating))}
+              {letterboxdEntry.rating % 1 ? '½' : ''} ({letterboxdEntry.rating})
+            </div>
+          )}
           {node.genres?.length > 0 && (
             <div className="detail-genres">
               {node.genres.map((g) => (
