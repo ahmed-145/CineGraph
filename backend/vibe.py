@@ -182,8 +182,10 @@ def compute_tfidf_blocklist(film_review_iter, df_threshold: float = 0.80,
         joined = " ".join(r for r in reviews if r)
         if not joined.strip():
             continue
-        scrubbed = scrub_entities(joined, spacy_model)
-        cleaned = clean_text(scrubbed)  # no extra_stopwords on pass 1
+        # Skip NER scrubbing here — DF only needs to find words present in
+        # >80% of films, and proper nouns are never that frequent. clean_text
+        # alone keeps the pre-pass fast (no per-film spaCy cost).
+        cleaned = clean_text(joined)
         unique = set(cleaned.split())
         for t in unique:
             df[t] = df.get(t, 0) + 1

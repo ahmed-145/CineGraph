@@ -225,16 +225,20 @@ def main():
             except Exception:
                 blocklist = set()
         if not blocklist:
-            print("Running TF-IDF pre-pass (collecting global document frequency)...")
+            print("Running TF-IDF pre-pass (document frequency over bulk review sources)...")
             all_ids = _all_tmdb_ids(client)
+            # DF statistics only need the in-memory bulk corpora (RT Kaggle, HF,
+            # Stanford). TMDB gap-fill adds mostly empty docs + slow network, so
+            # exclude it here — keeps the pre-pass fast (all dict lookups).
+            df_sources = [s for s in sources if s.name != "tmdb"]
             t0 = time.time()
             def _iter():
                 for i, tid in enumerate(all_ids):
-                    if i % 250 == 0 and i:
+                    if i % 5000 == 0 and i:
                         elapsed = time.time() - t0
                         print(f"  TF-IDF pass: {i}/{len(all_ids)} "
-                              f"({i / max(elapsed,1e-6):.2f} films/s)")
-                    yield tid, rs.cascading_reviews(tid, sources)
+                              f"({i / max(elapsed,1e-6):.0f} films/s)")
+                    yield tid, rs.cascading_reviews(tid, df_sources)
             blocklist = vibe_mod.compute_tfidf_blocklist(
                 _iter(), df_threshold=0.80, min_doc_count=50,
                 spacy_model=settings.spacy_model,
