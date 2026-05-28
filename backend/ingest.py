@@ -206,17 +206,13 @@ def main():
         batch = to_process[batch_idx * BATCH_SIZE : (batch_idx + 1) * BATCH_SIZE]
         print(f"--- Batch {batch_idx + 1}/{num_batches} ({len(batch)} films) ---")
 
-        # 1. Fetch TMDB metadata
-        films_data = []
-        for i, film in enumerate(batch):
-            print(f"  [{i+1}/{len(batch)}] {film['title']} ({film['tmdb_id']})", end=" ")
-            data = fetch_tmdb_metadata(film["tmdb_id"], api_key)
-            if data:
-                films_data.append(data)
-                print("✓")
-            else:
-                print("✗ skipped")
-            time.sleep(0.04)
+        # 1. Fetch TMDB metadata — parallel (network-bound, was the bottleneck)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as mpool:
+            results = list(mpool.map(
+                lambda f: fetch_tmdb_metadata(f["tmdb_id"], api_key), batch
+            ))
+        films_data = [d for d in results if d]
+        print(f"  Fetched metadata for {len(films_data)}/{len(batch)} films")
 
         if not films_data:
             continue
