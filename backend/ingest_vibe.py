@@ -116,6 +116,29 @@ def split_v1_vector(vec: list[float]) -> tuple[list[float], list[float]]:
     return vec[:td], vec[td : td + settings.visual_dim]
 
 
+def get_v2_sparse_ids(client: QdrantClient) -> set[int]:
+    """tmdb_ids in v2 currently flagged vibe_confident=False — the films a
+    new review source might be able to upgrade."""
+    if settings.qdrant_collection_v2 not in {c.name for c in client.get_collections().collections}:
+        return set()
+    out: set[int] = set()
+    offset = None
+    while True:
+        result, offset = client.scroll(
+            collection_name=settings.qdrant_collection_v2,
+            limit=256, offset=offset,
+            with_payload=["tmdb_id", "vibe_confident"], with_vectors=False,
+        )
+        for p in result:
+            if p.payload.get("vibe_confident") is False:
+                tid = p.payload.get("tmdb_id")
+                if tid is not None:
+                    out.add(tid)
+        if offset is None:
+            break
+    return out
+
+
 def _all_tmdb_ids(client: QdrantClient) -> list[int]:
     """Scroll v1 collection just for the tmdb_id list (cheap)."""
     ids: list[int] = []
@@ -144,7 +167,20 @@ def main():
         help="Run an extra pass first to compute the TF-IDF high-DF blocklist "
              "(PRD §6.1 stage 3). Saves to vibe_idf_blocklist.json.",
     )
+    parser.add_argument(
+        "--only-sparse", action="store_true",
+        help="Re-process ONLY films currently flagged vibe_confident=False in "
+             "v2. Use after adding new review sources to upgrade the long tail "
+             "without redoing the films that already have good vibe vectors.",
+    )
+    parser.add_argument(
+        "--min-tokens", type=int, default=settings.vibe_min_tokens,
+        help=f"Cleaned-token floor for a confident vibe vector "
+             f"(default {settings.vibe_min_tokens}). Lower to recover films "
+             f"with short reviews.",
+    )
     args = parser.parse_args()
+    min_tokens = args.min_tokens
 
     print("=== CineGraph Phase 2 (vibe axis) ===\n")
     client = get_qdrant()
@@ -157,8 +193,16 @@ def main():
 
     ensure_v2_collection(client)
 
-    done = get_v2_processed_ids(client)
-    print(f"Already in v2: {len(done)} films.\n")
+    if args.only_sparse:
+        # Re-process just the sparse films; treat confident ones as "done".
+        sparse_ids = get_v2_sparse_ids(client)
+        all_v2 = get_v2_processed_ids(client)
+        done = all_v2 - sparse_ids   # everything except sparse is skipped
+        print(f"v2 has {len(all_v2)} films, {len(sparse_ids)} sparse to re-process.")
+        print(f"(min_tokens={min_tokens})\n")
+    else:
+        done = get_v2_processed_ids(client)
+        print(f"Already in v2: {len(done)} films. (min_tokens={min_tokens})\n")
 
     print("Loading vibe embedding model...")
     vibe_embedder = TextEmbedding(model_name=settings.vibe_model)
@@ -242,6 +286,7 @@ def main():
                 spacy_model=settings.spacy_model,
                 chunk_words_max=settings.vibe_chunk_words,
                 tfidf_blocklist=blocklist or None,
+                min_tokens=min_tokens,
             )
             text_part, visual_part = split_v1_vector(vec)
             combined = text_part + result.vector + visual_part

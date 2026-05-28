@@ -219,6 +219,7 @@ def build_vibe_vector(
     spacy_model: str = "en_core_web_lg",
     chunk_words_max: int = 380,
     tfidf_blocklist: set[str] | None = None,
+    min_tokens: int = MIN_TOKENS,
 ) -> VibeResult:
     """Full pipeline: scrub → clean (with optional TF-IDF blocklist) → chunk → embed → mean-pool."""
     joined = " ".join(r for r in reviews if r)
@@ -230,7 +231,7 @@ def build_vibe_vector(
     cleaned = clean_text(scrubbed, extra_stopwords=tfidf_blocklist)
     token_count = len(cleaned.split())
 
-    if token_count < MIN_TOKENS:
+    if token_count < min_tokens:
         return VibeResult(vector=[0.0] * vibe_dim, confident=False,
                           chunk_count=0, raw_token_count=token_count)
 

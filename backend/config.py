@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     spacy_model: str = "en_core_web_lg"
     vibe_review_max_pages: int = 2
     vibe_chunk_words: int = 380   # ~512 BERT tokens
+    vibe_min_tokens: int = 80     # below this a film is "sparse" (metadata-only)
     llm_model: str = "llama-3.3-70b-versatile"
     # Supabase
     supabase_jwt_secret: str = ""
