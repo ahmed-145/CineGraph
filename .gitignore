@@ -54,8 +54,7 @@ Explore Canvas.html
 backend/review_data/stanford_imdb/
 backend/review_data/rt_critics_processed.parquet
 backend/review_data/rt_critics.csv
+backend/review_data/rotten_tomatoes_movies.csv
 backend/review_data/ebert.sqlite
-backend/review_data/imdb_to_tmdb.json
-backend/review_data/rt_to_tmdb.json
 backend/vibe_idf_blocklist.json
 backend/*.deb
