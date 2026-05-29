@@ -18,6 +18,7 @@ export default function DetailPanel({
   isExcluded,
   onToggleWatchlist,
   onExcludeForever,
+  onRemoveFromCanvas,
   graphNodes = [],
   onSelectFilm,
   letterboxdEntry,
@@ -281,6 +282,15 @@ export default function DetailPanel({
             Add as seed
           </button>
         ) : null}
+        {!isSeed && onRemoveFromCanvas && (
+          <button
+            className="detail-btn detail-btn--remove"
+            onClick={() => { onRemoveFromCanvas(node.tmdb_id); }}
+            title="Remove this film from the canvas (doesn't ban it)"
+          >
+            Remove
+          </button>
+        )}
       </div>
 
       {/* Secondary actions: watchlist + permanent exclusion */}

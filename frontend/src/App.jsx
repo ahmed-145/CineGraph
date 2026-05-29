@@ -441,6 +441,15 @@ export default function App() {
     [prefs, removeNode]
   )
 
+  const handleRemoveFromCanvas = useCallback(
+    (tmdb_id) => {
+      removeNode(tmdb_id)
+      setSelectedNode(null)
+      setHoveredNode(null)
+    },
+    [removeNode]
+  )
+
   // ── constellation save / load / share ──────────────────────────────────────
   const handleSave = useCallback(async (name) => {
     const data = serializeCanvas(
@@ -627,6 +636,7 @@ export default function App() {
             isExcluded={prefs.excluded.has(String(selectedNode.id))}
             onToggleWatchlist={handleToggleWatchlist}
             onExcludeForever={handleExcludeForever}
+            onRemoveFromCanvas={handleRemoveFromCanvas}
             letterboxdEntry={letterboxd.watched.get(String(selectedNode.id))}
             graphNodes={graphData.nodes}
             onSelectFilm={(film) => {

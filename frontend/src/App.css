@@ -710,6 +710,16 @@ body {
 }
 .detail-btn--seed-active:hover { background: rgba(255,255,255,0.09); }
 
+.detail-btn--remove {
+  color: rgba(255, 100, 100, 0.75);
+  border-color: rgba(255, 100, 100, 0.25);
+}
+.detail-btn--remove:hover {
+  background: rgba(255, 100, 100, 0.08);
+  border-color: rgba(255, 100, 100, 0.5);
+  color: rgba(255, 100, 100, 1);
+}
+
 .detail-genre-tag {
   padding: 2px 8px;
   background: rgba(255,255,255,0.04);
