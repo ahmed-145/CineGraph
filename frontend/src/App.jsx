@@ -203,6 +203,7 @@ export default function App() {
     addSeed,
     removeSeed,
     clearCanvas,
+    loadLibrary,
     touchNode,
     restoreArchived,
     loadConstellation,
@@ -215,6 +216,7 @@ export default function App() {
   } = useGraph(prefs.excluded, prefs.watchlist, letterboxd.watched)
 
   const [showLetterboxd, setShowLetterboxd] = useState(false)
+  const [libraryMode, setLibraryMode] = useState(false)
 
   const constellations = useConstellations(auth.token)
 
@@ -385,6 +387,7 @@ export default function App() {
   const handleSelect = useCallback(
     (film) => {
       summonFilm(film)
+      setLibraryMode(false)
     },
     [summonFilm]
   )
@@ -449,6 +452,35 @@ export default function App() {
     },
     [removeNode]
   )
+
+  const handleLibraryMode = useCallback(async () => {
+    if (!letterboxd.watched.size) {
+      setShowLetterboxd(true)
+      return
+    }
+    const sorted = [...letterboxd.watched.keys()]
+      .map(Number)
+      .sort((a, b) => {
+        const ra = letterboxd.watched.get(String(a))?.rating || 0
+        const rb = letterboxd.watched.get(String(b))?.rating || 0
+        return rb - ra
+      })
+      .slice(0, 80)
+    try {
+      const films = await api.filmsBatch(sorted)
+      loadLibrary(films)
+      setLibraryMode(true)
+    } catch (e) {
+      console.error('Library load failed:', e)
+    }
+  }, [letterboxd.watched, loadLibrary])
+
+  const handleExploreMode = useCallback(() => {
+    if (libraryMode) {
+      clearCanvas()
+      setLibraryMode(false)
+    }
+  }, [libraryMode, clearCanvas])
 
   // ── constellation save / load / share ──────────────────────────────────────
   const handleSave = useCallback(async (name) => {
@@ -604,8 +636,15 @@ export default function App() {
           />
         </div>
         <div className="mode-toggle">
-          <button className="active">Explore</button>
-          <button disabled title="Requires Letterboxd import (coming soon)">Library</button>
+          <button
+            className={!libraryMode ? 'active' : ''}
+            onClick={handleExploreMode}
+          >Explore</button>
+          <button
+            className={libraryMode ? 'active' : ''}
+            onClick={handleLibraryMode}
+            title={letterboxd.watched.size ? `View your ${letterboxd.watched.size} watched films` : 'Import Letterboxd CSV first'}
+          >{letterboxd.watched.size > 0 ? `Library (${letterboxd.watched.size})` : 'Library'}</button>
         </div>
       </div>
 

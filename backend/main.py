@@ -276,6 +276,21 @@ def health():
     }
 
 
+class BatchRequest(BaseModel):
+    tmdb_ids: list[int]
+
+
+@app.post("/films/batch")
+def films_batch(req: BatchRequest):
+    """Return film metadata for a list of tmdb_ids (up to 200). Used by Library mode."""
+    out = []
+    for tid in req.tmdb_ids[:200]:
+        payload = FILM_INDEX.get(tid)
+        if payload:
+            out.append(_payload_to_film(payload))
+    return out
+
+
 @app.get("/search")
 async def search(q: str = Query(..., min_length=1), limit: int = 8):
     q_lower = q.lower().strip()

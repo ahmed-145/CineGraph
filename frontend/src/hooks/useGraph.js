@@ -421,6 +421,41 @@ export function useGraph(excludedSet = new Set(), watchlistSet = new Set(), watc
     lastTouchedRef.current.clear()
   }, [])
 
+  const loadLibrary = useCallback((films) => {
+    lastTouchedRef.current.clear()
+    const N = films.length
+    // Arrange in concentric rings so films don't pile on top of each other.
+    const rings = [
+      { count: 10, r: 160 },
+      { count: 20, r: 320 },
+      { count: 35, r: 480 },
+      { count: Infinity, r: 640 },
+    ]
+    let idx = 0
+    const positioned = []
+    for (const { count, r } of rings) {
+      const slice = films.slice(idx, idx + count)
+      if (!slice.length) break
+      slice.forEach((film, i) => {
+        const angle = (2 * Math.PI * i) / slice.length - Math.PI / 2
+        const x = Math.cos(angle) * r
+        const y = Math.sin(angle) * r
+        lastTouchedRef.current.set(String(film.tmdb_id), Date.now())
+        positioned.push({ ...film, id: String(film.tmdb_id), type: 'root', x, y, fx: x, fy: y })
+      })
+      idx += slice.length
+      if (idx >= N) break
+    }
+    setNodes(positioned)
+    setLinks([])
+    setSeeds([])
+    setIntersectResultIds(new Set())
+    setExpandedIds(new Set())
+    setArchivedNodes([])
+    setSelectedNode(null)
+    setMode('exploring')
+  }, [])
+
   const loadConstellation = useCallback((data) => {
     lastTouchedRef.current.clear()
     const now = Date.now()
@@ -467,6 +502,7 @@ export function useGraph(excludedSet = new Set(), watchlistSet = new Set(), watc
     addSeed,
     removeSeed,
     clearCanvas,
+    loadLibrary,
     touchNode,
     restoreArchived,
     loadConstellation,

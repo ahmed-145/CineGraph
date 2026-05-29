@@ -79,22 +79,27 @@ export default function LetterboxdModal({ onClose, onImport, importing, progress
           </>
         )}
 
-        {importing && progress && (
+        {(importing || progress?.status === 'done') && progress && (
           <div className="lb-progress">
             <div className="lb-progress-status">
               {progress.status === 'resolving' && `Resolving films… ${progress.resolved}/${progress.total}`}
               {progress.status === 'storing' && 'Saving your library…'}
               {progress.status === 'parsing' && 'Reading CSV…'}
               {progress.status === 'uploading' && 'Uploading…'}
-              {progress.status === 'done' && `Done — ${progress.matched} films matched`}
+              {progress.status === 'done' && `✓ ${progress.matched} films imported`}
             </div>
             <div className="lb-bar-track">
-              <div className="lb-bar-fill" style={{ width: `${pct}%` }} />
+              <div className="lb-bar-fill" style={{ width: `${progress.status === 'done' ? 100 : pct}%` }} />
             </div>
             {progress.status === 'done' && (
-              <div className="lb-progress-detail">
-                {progress.matched} matched · {progress.unmatched} couldn't be resolved
-              </div>
+              <>
+                <div className="lb-progress-detail">
+                  {progress.matched} matched · {progress.unmatched} couldn't be resolved
+                </div>
+                <button className="lb-import-btn" style={{ marginTop: 12 }} onClick={onClose}>
+                  View Library →
+                </button>
+              </>
             )}
           </div>
         )}

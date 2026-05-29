@@ -36,4 +36,11 @@ export const api = {
     req(`/lazy_embed/${tmdb_id}`, { method: 'POST' }),
 
   watchProviders: (tmdb_id) => req(`/watch_providers/${tmdb_id}`),
+
+  filmsBatch: (tmdb_ids) =>
+    req('/films/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tmdb_ids }),
+    }),
 }
